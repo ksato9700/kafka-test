@@ -15,6 +15,8 @@ struct KafkaMessage {
 #[tokio::main]
 
 async fn main() {
+    tracing_subscriber::fmt::init();
+
     let bootstrap_servers =
         env::var("KAFKA_BOOTSTRAP_SERVERS").unwrap_or_else(|_| "localhost:9092".to_string());
 
@@ -22,7 +24,7 @@ async fn main() {
 
     let group_id = env::var("CONSUMER_GROUP_ID").unwrap_or_else(|_| "my-group-1".to_string());
 
-    println!(
+    tracing::info!(
         "🛠️ Connecting KafkaConsumer to topic '{}' at '{}' (group: '{}')...",
         topic, bootstrap_servers, group_id
     );
@@ -41,8 +43,8 @@ async fn main() {
         .subscribe(&[&topic])
         .expect("Can't subscribe to specified topic");
 
-    println!("✅ KafkaConsumer connected. Waiting for new messages...\n");
-    println!("📥 Listening for messages...");
+    tracing::info!("✅ KafkaConsumer connected. Waiting for new messages...\n");
+    tracing::info!("📥 Listening for messages...");
 
     let stream_processor = consumer.stream().try_for_each(|msg| async move {
         if let Some(payload) = msg.payload_view::<str>() {
@@ -54,18 +56,18 @@ async fn main() {
                             .expect("Time went backwards")
                             .as_secs_f64();
                         let latency = received_time - data.event_time;
-                        println!(
+                        tracing::info!(
                             "📨 New message: [ID={}] {} at {:.3}",
                             data.message_id, data.content, data.event_time
                         );
-                        println!("⏱️ Latency: {:.3} seconds\n", latency);
+                        tracing::info!("⏱️ Latency: {:.3} seconds\n", latency);
                     }
-                    Err(e) => eprintln!("⚠️ JSON parsing error: {:?} - payload: {}", e, s),
+                    Err(e) => tracing::warn!("⚠️ JSON parsing error: {:?} - payload: {}", e, s),
                 },
-                Err(e) => eprintln!("⚠️ Message payload is not a string: {:?}", e),
+                Err(e) => tracing::warn!("⚠️ Message payload is not a string: {:?}", e),
             }
         } else {
-            println!("No payload");
+            tracing::info!("No payload");
         }
         Ok(())
     });
@@ -73,11 +75,11 @@ async fn main() {
     tokio::select! {
         result = stream_processor => {
             if let Err(e) = result {
-                eprintln!("❌ Stream processing error: {:?}", e);
+                tracing::error!("❌ Stream processing error: {:?}", e);
             }
         }
         _ = tokio::signal::ctrl_c() => {
-            println!("🛑 Shutting down gracefully...");
+            tracing::info!("🛑 Shutting down gracefully...");
         }
     }
 }

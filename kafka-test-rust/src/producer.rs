@@ -15,7 +15,8 @@ struct Message {
 
 #[tokio::main]
 async fn main() {
-    println!("Hello from kafka-test-rust!");
+    tracing_subscriber::fmt::init();
+    tracing::info!("Hello from kafka-test-rust!");
 
     let bootstrap_servers = env::var("KAFKA_BOOTSTRAP_SERVERS").unwrap_or_else(|_| "localhost:9092".to_string());
     let topic = env::var("TOPIC_NAME").unwrap_or_else(|_| "my-topic-1".to_string());
@@ -23,10 +24,11 @@ async fn main() {
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", &bootstrap_servers)
         .set("message.timeout.ms", "5000")
+        .set("broker.address.family", "v4")
         .create()
         .expect("Producer creation error");
 
-    println!("🚀 Producer is now running...");
+    tracing::info!("🚀 Producer is now running...");
 
     let mut message_id = 0;
     loop {
@@ -50,8 +52,8 @@ async fn main() {
             )
             .await
         {
-            Ok(_) => println!("🚀 Sent: {:?}", payload),
-            Err(e) => eprintln!("❌ Error sending message: {:?}", e),
+            Ok(_) => tracing::info!("🚀 Sent: {:?}", payload),
+            Err(e) => tracing::error!("❌ Error sending message: {:?}", e),
         }
 
         message_id += 1;
