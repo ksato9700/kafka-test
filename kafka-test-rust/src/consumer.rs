@@ -18,22 +18,26 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let bootstrap_servers =
-        env::var("KAFKA_BOOTSTRAP_SERVERS").unwrap_or_else(|_| "localhost:9092".to_string());
+        env::var("KAFKA_BOOTSTRAP_SERVERS").unwrap_or_else(|_| "127.0.0.1:9094".to_string());
 
     let topic = env::var("TOPIC_NAME").unwrap_or_else(|_| "my-topic-1".to_string());
 
     let group_id = env::var("CONSUMER_GROUP_ID").unwrap_or_else(|_| "my-group-1".to_string());
 
+    let auto_offset_reset = env::var("AUTO_OFFSET_RESET").unwrap_or_else(|_| "latest".to_string());
+
     tracing::info!(
         "🛠️ Connecting KafkaConsumer to topic '{}' at '{}' (group: '{}')...",
-        topic, bootstrap_servers, group_id
+        topic,
+        bootstrap_servers,
+        group_id
     );
 
     let consumer: StreamConsumer = ClientConfig::new()
         .set("bootstrap.servers", &bootstrap_servers)
         .set("group.id", &group_id)
         .set("enable.partition.eof", "false")
-        .set("auto.offset.reset", "latest")
+        .set("auto.offset.reset", &auto_offset_reset)
         .set("enable.auto.commit", "true")
         .set("broker.address.family", "v4")
         .create()
@@ -43,7 +47,20 @@ async fn main() {
         .subscribe(&[&topic])
         .expect("Can't subscribe to specified topic");
 
-    tracing::info!("✅ KafkaConsumer connected. Waiting for new messages...\n");
+    tracing::info!("✅ KafkaConsumer initialized. Verifying connectivity...");
+
+    match consumer.fetch_metadata(Some(&topic), std::time::Duration::from_secs(5)) {
+        Ok(metadata) => {
+            tracing::info!(
+                "✅ Successfully connected to broker. Metadata: {:?}",
+                metadata.topics()
+            );
+        }
+        Err(e) => {
+            tracing::error!("❌ Failed to fetch metadata from broker: {:?}", e);
+        }
+    }
+
     tracing::info!("📥 Listening for messages...");
 
     let stream_processor = consumer.stream().try_for_each(|msg| async move {
@@ -58,7 +75,9 @@ async fn main() {
                         let latency = received_time - data.event_time;
                         tracing::info!(
                             "📨 New message: [ID={}] {} at {:.3}",
-                            data.message_id, data.content, data.event_time
+                            data.message_id,
+                            data.content,
+                            data.event_time
                         );
                         tracing::info!("⏱️ Latency: {:.3} seconds\n", latency);
                     }

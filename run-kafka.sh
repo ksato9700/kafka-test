@@ -1,5 +1,19 @@
 #!/bin/sh
+# Create network if it doesn't exist
+docker network create kafka-net 2>/dev/null || true
+
 docker run -d --rm \
 	--name kafka-broker \
-	--publish 9092:9092 \
+	--network kafka-net \
+	--publish 9094:9094 \
+	-e KAFKA_NODE_ID=1 \
+	-e KAFKA_PROCESS_ROLES=broker,controller \
+	-e KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094 \
+	-e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-broker:9092,EXTERNAL://localhost:9094 \
+	-e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT \
+	-e KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka-broker:9093 \
+	-e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
+	-e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
+	-e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1 \
+	-e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 \
 	apache/kafka:latest

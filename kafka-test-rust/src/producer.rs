@@ -18,7 +18,8 @@ async fn main() {
     tracing_subscriber::fmt::init();
     tracing::info!("Hello from kafka-test-rust!");
 
-    let bootstrap_servers = env::var("KAFKA_BOOTSTRAP_SERVERS").unwrap_or_else(|_| "localhost:9092".to_string());
+    let bootstrap_servers =
+        env::var("KAFKA_BOOTSTRAP_SERVERS").unwrap_or_else(|_| "127.0.0.1:9094".to_string());
     let topic = env::var("TOPIC_NAME").unwrap_or_else(|_| "my-topic-1".to_string());
 
     let producer: FutureProducer = ClientConfig::new()
@@ -45,6 +46,7 @@ async fn main() {
 
         let payload = serde_json::to_string(&message).expect("Failed to serialize message");
 
+        // Send message
         match producer
             .send(
                 FutureRecord::<(), str>::to(&topic).payload(&payload),
@@ -57,6 +59,14 @@ async fn main() {
         }
 
         message_id += 1;
-        time::sleep(Duration::from_secs(2)).await;
+
+        // Wait with cancellation support
+        tokio::select! {
+            _ = time::sleep(Duration::from_secs(2)) => {}
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("🛑 Shutting down producer...");
+                break;
+            }
+        }
     }
 }
