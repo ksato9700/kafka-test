@@ -13,53 +13,63 @@ Clients should use the following environment variables for configuration. Defaul
 | `CONSUMER_GROUP_ID` | The consumer group ID (Consumer only). | `my-group-1` | `my-group-1` |
 | `AUTO_OFFSET_RESET` | Start position if no offset is committed. | `latest` | `latest` |
 
-## 2. Message Schema
+## 2. Message Schema (Avro)
 
-Messages are exchanged in JSON format. The schema is as follows:
+Messages are exchanged in **Raw (Schemaless) Avro** format. The schema is defined in `schemas/message.avsc`:
 
 ```json
 {
-  "message_id": 123,
-  "event_time": 1707744000.123,
-  "content": "Message 123"
+  "type": "record",
+  "name": "Message",
+  "namespace": "com.example.kafka",
+  "fields": [
+    {"name": "message_id", "type": "long"},
+    {"name": "event_time", "type": "double"},
+    {"name": "content", "type": "string"}
+  ]
 }
 ```
 
+### Serialization Strategy:
+- **Format:** Raw Avro binary (no OCF header, no Schema Registry magic byte).
+- **Schema Source:** Clients must load the schema from the `schemas/message.avsc` file at runtime.
+    - Local: `../schemas/message.avsc` (relative to project root).
+    - Docker: `/app/schemas/message.avsc` (copied into image).
+
 ### Fields:
-- `message_id` (Integer/Long): A monotonically increasing identifier for the message.
-- `event_time` (Double): The Unix timestamp (**seconds** since epoch, e.g. `1707744000.123`) when the message was generated. *Note: Ensure seconds are used, not milliseconds.*
-- `content` (String): A human-readable string, typically following the pattern `"Message {message_id}"`.
+- `message_id` (Long): A monotonically increasing identifier.
+- `event_time` (Double): Unix timestamp in **seconds** (e.g. `1707744000.123`).
+- `content` (String): e.g., `"Message {message_id}"`.
 
 ## 3. Producer Design
 
 ### Core Logic:
-1. **Initialization**: Initialize the Kafka producer using `KAFKA_BOOTSTRAP_SERVERS`. Configure strictly for **IPv4** if necessary (e.g., `broker.address.family` in `rdkafka` or Java properties) to avoid `localhost` IPv6 resolution issues.
-2. **Serialization**: Use a JSON serializer for the message value.
-3. **Loop**:
-    - Generate a `message_id` starting from 0.
-    - Capture the current Unix timestamp as `event_time` (in seconds).
-    - Construct the message object.
-    - Send the message to `TOPIC_NAME`.
-    - Log the sent message to stdout/logger.
-    - Increment `message_id`.
-    - Wait for 2 seconds before the next iteration.
-4. **Shutdown**: Handle `SIGINT` to close the producer gracefully.
-
-### Recommended Settings:
-- `message.timeout.ms`: 5000 (if supported by the client library).
+1. **Initialization**: Initialize the Kafka producer using `KAFKA_BOOTSTRAP_SERVERS`. Configure strictly for **IPv4**.
+2. **Schema Loading**: Load and parse `schemas/message.avsc`.
+3. **Serialization**: Serialize the message object to **Raw Avro bytes** using the loaded schema.
+4. **Loop**:
+    - Generate `message_id`.
+    - Capture `event_time` (seconds).
+    - Construct message record.
+    - Serialize to bytes.
+    - Send bytes to `TOPIC_NAME`.
+    - Log sent message.
+    - Wait 2 seconds.
+5. **Shutdown**: Handle `SIGINT`.
 
 ## 4. Consumer Design
 
 ### Core Logic:
-1. **Initialization**: Initialize the Kafka consumer using `KAFKA_BOOTSTRAP_SERVERS` and `CONSUMER_GROUP_ID`. Force **IPv4** preference.
-2. **Subscription**: Subscribe to `TOPIC_NAME`.
-3. **Message Processing**:
-    - Continuously poll for new messages.
-    - On receipt, deserialize the JSON payload.
-    - Capture the `received_time` (current Unix timestamp in seconds).
+1. **Initialization**: Initialize consumer. Force **IPv4**.
+2. **Schema Loading**: Load and parse `schemas/message.avsc`.
+3. **Subscription**: Subscribe to `TOPIC_NAME`.
+4. **Message Processing**:
+    - Poll for messages.
+    - Deserialize the **Raw Avro bytes** using the schema.
+    - Capture `received_time` (seconds).
     - Calculate `latency = received_time - event_time`.
-    - Log the message details and the calculated latency.
-4. **Shutdown**: Handle `SIGINT` (Ctrl-C) to explicitly `close()` the consumer. **Critical** for ensuring offsets are committed to the broker before exit.
+    - Log details and latency.
+5. **Shutdown**: Handle `SIGINT`.
 
 ### Recommended Settings:
 - `auto.offset.reset`: `latest` (default).

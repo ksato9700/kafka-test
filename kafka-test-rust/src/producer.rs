@@ -1,22 +1,41 @@
+use apache_avro::Schema;
+use apache_avro::types::Record;
 use rdkafka::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::util::Timeout;
-use serde::Serialize;
 use std::env;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time;
 
-#[derive(Serialize)]
-struct Message {
-    message_id: u64,
-    event_time: f64,
-    content: String,
+fn load_schema() -> Schema {
+    let paths = [
+        "../schemas/message.avsc",
+        "/app/schemas/message.avsc",
+        "schemas/message.avsc", // Fallback
+    ];
+
+    for p in paths {
+        if Path::new(p).exists() {
+            let mut file = File::open(p).expect("Failed to open schema file");
+            let mut content = String::new();
+            file.read_to_string(&mut content)
+                .expect("Failed to read schema file");
+            return Schema::parse_str(&content).expect("Failed to parse schema");
+        }
+    }
+    panic!("Schema file not found in paths: {:?}", paths);
 }
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
     tracing::info!("Hello from kafka-test-rust!");
+
+    let schema = load_schema();
+    tracing::info!("Loaded Avro schema");
 
     let bootstrap_servers =
         env::var("KAFKA_BOOTSTRAP_SERVERS").unwrap_or_else(|_| "127.0.0.1:9094".to_string());
@@ -38,23 +57,25 @@ async fn main() {
             .expect("Time went backwards")
             .as_secs_f64();
 
-        let message = Message {
-            message_id,
-            event_time,
-            content: format!("Message {}", message_id),
-        };
+        // Create Avro record manually since we don't have generated structs
+        // Alternatively we could define a struct with Serde and use to_avro_datum
+        let mut record = Record::new(&schema).unwrap();
+        record.put("message_id", message_id);
+        record.put("event_time", event_time);
+        record.put("content", format!("Message {}", message_id));
 
-        let payload = serde_json::to_string(&message).expect("Failed to serialize message");
+        let payload =
+            apache_avro::to_avro_datum(&schema, record).expect("Failed to serialize to Avro");
 
         // Send message
         match producer
             .send(
-                FutureRecord::<(), str>::to(&topic).payload(&payload),
+                FutureRecord::<(), [u8]>::to(&topic).payload(&payload),
                 Timeout::Never,
             )
             .await
         {
-            Ok(_) => tracing::info!("🚀 Sent: {:?}", payload),
+            Ok(_) => tracing::info!("🚀 Sent: Message {} ({} bytes)", message_id, payload.len()),
             Err(e) => tracing::error!("❌ Error sending message: {:?}", e),
         }
 

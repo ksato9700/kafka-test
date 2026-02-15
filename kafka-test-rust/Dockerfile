@@ -8,7 +8,7 @@ WORKDIR /usr/src/app
 # cmake/make/g++ required for building rdkafka from source
 RUN apk add --no-cache musl-dev openssl-dev pkgconfig cmake make g++ zlib-dev cyrus-sasl-dev curl-dev zlib-static openssl-libs-static
 
-COPY . .
+COPY kafka-test-rust .
 
 # Build statically linked binary
 RUN cargo build --release
@@ -23,6 +23,7 @@ WORKDIR /app
 # cyrus-sasl might be needed if SASL is used dynamically
 RUN apk add --no-cache libgcc libstdc++
 
+COPY schemas /app/schemas
 COPY --from=builder /usr/src/app/target/release/kafka-consumer /usr/local/bin/kafka-consumer
 COPY --from=builder /usr/src/app/target/release/kafka-producer /usr/local/bin/kafka-producer
 

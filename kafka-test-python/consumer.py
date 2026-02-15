@@ -1,9 +1,12 @@
+import io
 import json
 import logging
 import os
 import socket
 import time
+from pathlib import Path
 
+import fastavro
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 
@@ -27,8 +30,29 @@ logging.basicConfig(
 )
 
 
+def load_schema():
+    # Try to find schema relative to current file or at /app/schemas
+    base_dir = Path(__file__).resolve().parent
+    schema_path_local = base_dir / "../schemas/message.avsc"
+    schema_path_docker = Path("/app/schemas/message.avsc")
+
+    path_to_use = (
+        schema_path_local if schema_path_local.exists() else schema_path_docker
+    )
+
+    if not path_to_use.exists():
+        raise FileNotFoundError(f"Schema not found at {path_to_use}")
+
+    with path_to_use.open("r") as f:
+        return fastavro.parse_schema(json.load(f))
+
+
 # environmental variable retrieval
 def main():
+    # Load Avro schema
+    schema = load_schema()
+    logging.info(f"Loaded Avro schema from {schema['name']}")
+
     bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:9094")
     if "localhost" in bootstrap_servers:
         bootstrap_servers = bootstrap_servers.replace("localhost", "127.0.0.1")
@@ -41,13 +65,13 @@ def main():
     )
 
     try:
+        # No value_deserializer, we handle raw bytes
         consumer = KafkaConsumer(
             topic,
             bootstrap_servers=bootstrap_servers,
             auto_offset_reset="latest",
             group_id=group_id,
             enable_auto_commit=True,
-            value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         )
         logging.info("✅ KafkaConsumer connected. Waiting for new messages...\n")
     except KafkaError as e:
@@ -62,7 +86,10 @@ def main():
     try:
         for message in consumer:
             try:
-                data = message.value
+                # Deserialize Avro
+                bytes_io = io.BytesIO(message.value)
+                data = fastavro.schemaless_reader(bytes_io, schema)
+
                 received_time = time.time()
                 latency = received_time - data.get("event_time", received_time)
                 logging.info(

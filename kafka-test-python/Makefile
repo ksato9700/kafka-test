@@ -7,7 +7,7 @@ run-producer:
 	uv run python producer.py
 
 docker-build:
-	docker build -t kafka-test-python .
+	cd .. && docker build -f kafka-test-python/Dockerfile -t kafka-test-python .
 
 docker-run-consumer: docker-build
 	docker run --rm --network kafka-net -e KAFKA_BOOTSTRAP_SERVERS="kafka-broker:9092" kafka-test-python python consumer.py

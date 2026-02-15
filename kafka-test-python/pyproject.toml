@@ -6,4 +6,5 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "kafka-python>=2.3.0",
+    "fastavro>=1.9.0",
 ]

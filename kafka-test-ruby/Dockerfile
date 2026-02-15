@@ -7,7 +7,7 @@ WORKDIR /app
 # but --use-system-libraries usually avoids compiling.
 RUN apk add --no-cache build-base openssl-dev librdkafka-dev bash
 
-COPY Gemfile ./
+COPY kafka-test-ruby/Gemfile ./
 # Remove system library config to fallback to bundled compilation
 # Install gems and cleanup cache/artifacts to reduce image size
 RUN bundle config set --global without 'development test' && \
@@ -26,6 +26,7 @@ WORKDIR /app
 RUN apk add --no-cache librdkafka
 
 COPY --from=builder /usr/local/bundle /usr/local/bundle
-COPY consumer.rb producer.rb ./
+COPY schemas /app/schemas
+COPY kafka-test-ruby/consumer.rb kafka-test-ruby/producer.rb ./
 
 CMD ["ruby", "consumer.rb"]

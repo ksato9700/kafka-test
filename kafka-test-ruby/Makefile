@@ -10,7 +10,7 @@ run-producer:
 	bundle exec ruby producer.rb
 
 docker-build:
-	docker build -t kafka-test-ruby .
+	cd .. && docker build -f kafka-test-ruby/Dockerfile -t kafka-test-ruby .
 
 docker-run-consumer: docker-build
 	docker run --rm --network kafka-net -e KAFKA_BOOTSTRAP_SERVERS="kafka-broker:9092" kafka-test-ruby ruby consumer.rb

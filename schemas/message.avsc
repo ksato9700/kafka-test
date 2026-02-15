@@ -1,0 +1,10 @@
+{
+  "type": "record",
+  "name": "Message",
+  "namespace": "com.example.kafka",
+  "fields": [
+    {"name": "message_id", "type": "long"},
+    {"name": "event_time", "type": "double"},
+    {"name": "content", "type": "string"}
+  ]
+}

@@ -2,6 +2,21 @@ require "rdkafka"
 require "json"
 require "time"
 require "logger"
+require "avro"
+require "stringio"
+
+def load_schema
+  paths = [
+    "../schemas/message.avsc",
+    "/app/schemas/message.avsc",
+    "schemas/message.avsc"
+  ]
+
+  path = paths.find { |p| File.exist?(p) }
+  raise "Schema file not found in paths: #{paths}" unless path
+
+  Avro::Schema.parse(File.read(path))
+end
 
 def main
   STDOUT.sync = true
@@ -11,6 +26,9 @@ def main
   end
 
   logger.info "Hello from kafka-test-ruby!"
+
+  schema = load_schema
+  logger.info "Loaded Avro schema: #{schema.name}"
 
   bootstrap_servers = ENV.fetch("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:9094")
   topic = ENV.fetch("TOPIC_NAME", "my-topic-1")
@@ -26,15 +44,20 @@ def main
   logger.info "🚀 Producer is now running..."
 
   message_id = 0
+  writer = Avro::IO::DatumWriter.new(schema)
+
   loop do
     event_time = Time.now.to_f
     message = {
-      message_id: message_id,
-      event_time: event_time,
-      content: "Message #{message_id}"
+      "message_id" => message_id,
+      "event_time" => event_time,
+      "content" => "Message #{message_id}"
     }
 
-    payload = JSON.generate(message)
+    buffer = StringIO.new
+    encoder = Avro::IO::BinaryEncoder.new(buffer)
+    writer.write(message, encoder)
+    payload = buffer.string
 
     begin
       producer.produce(
@@ -42,7 +65,7 @@ def main
           payload: payload
       ).wait
 
-      logger.info "🚀 Sent: #{payload}"
+      logger.info "🚀 Sent: #{message}"
     rescue Rdkafka::RdkafkaError => e
       logger.error "❌ Error sending message: #{e.message}"
     end

@@ -7,7 +7,7 @@ run-producer:
 	sbt "runMain com.example.kafka.Producer"
 
 docker-build:
-	docker build -t kafka-test-scala .
+	cd .. && docker build -f kafka-test-scala/Dockerfile -t kafka-test-scala .
 
 docker-run-consumer: docker-build
 	docker run --rm --network kafka-net -e KAFKA_BOOTSTRAP_SERVERS="kafka-broker:9092" kafka-test-scala java -cp "lib/*" com.example.kafka.Consumer

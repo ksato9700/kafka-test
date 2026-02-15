@@ -1,0 +1,30 @@
+# Git
+.git
+.gitignore
+
+# Build Artifacts (Recursive)
+**/target/
+**/build/
+**/dist/
+**/out/
+
+# Dependencies / Virtual Envs
+**/.venv/
+**/venv/
+**/node_modules/
+**/vendor/bundle/
+
+# IDE / Editor
+**/.idea/
+**/.vscode/
+**/.bsp/
+**/.metals/
+**/*.iml
+**/.DS_Store
+
+# Gradle
+**/.gradle/
+
+# Temporary
+tmp/
+*.log
