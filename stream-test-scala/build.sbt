@@ -8,4 +8,6 @@ libraryDependencies ++= Seq(
   "ch.qos.logback" % "logback-classic" % "1.5.3"
 )
 
+enablePlugins(JavaAppPackaging)
+
 Compile / mainClass := Some("com.example.kafka.StreamSumApp")

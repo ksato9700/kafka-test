@@ -1,16 +1,15 @@
-FROM sbt-builder:latest AS builder
+FROM sbtscala/scala-sbt:eclipse-temurin-jammy-17.0.10_7_1.9.9_3.4.1 AS builder
 
 WORKDIR /app
-COPY stream-test-scala/build.sbt ./
-COPY stream-test-scala/project ./project
-RUN sbt update
-
+COPY stream-test-scala/build.sbt stream-test-scala/project ./project/
 COPY stream-test-scala/src ./src
-RUN sbt assembly
+RUN sbt stage
 
 FROM eclipse-temurin:21-jre-alpine
 
 WORKDIR /app
-COPY --from=builder /app/target/scala-3.3.1/stream-test-scala-assembly-0.1.0.jar ./app.jar
+COPY --from=builder /app/target/universal/stage /app
 
-CMD ["java", "-jar", "app.jar"]
+ENV PATH="/app/bin:${PATH}"
+
+CMD ["stream-test-scala"]

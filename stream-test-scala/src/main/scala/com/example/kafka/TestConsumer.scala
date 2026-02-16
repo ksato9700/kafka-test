@@ -7,12 +7,13 @@ import org.slf4j.{Logger, LoggerFactory}
 import java.io.ByteArrayInputStream
 import java.time.Duration
 import java.util.{Collections, Properties}
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong}
 import java.util.concurrent.{Executors, TimeUnit}
-import java.util.concurrent.atomic.AtomicLong
 
 object TestConsumer:
   private val logger: Logger = LoggerFactory.getLogger(getClass)
   private val resultCounter = new AtomicLong(0)
+  private val running = new AtomicBoolean(true)
 
   private def readVarint(in: ByteArrayInputStream): Long =
     var val_res = 0L
@@ -39,9 +40,15 @@ object TestConsumer:
 
     logger.info(s"🚀 Starting Ultra-Performance Scala Consumers: $numThreads")
 
-    for i <- 0 until numThreads do
+    Runtime.getRuntime.addShutdownHook(new Thread(() => {
+      logger.info("🛑 Shutting down Scala consumers...")
+      running.set(false)
+      reporter.shutdown()
+    }))
+
+    val threads = for i <- 0 until numThreads yield
       val threadId = i
-      new Thread(() => {
+      val thread = new Thread(() => {
         val props = new Properties()
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers)
         props.put(ConsumerConfig.GROUP_ID_CONFIG, s"stream-test-result-consumer-scala-$threadId")
@@ -56,7 +63,7 @@ object TestConsumer:
         logger.info(s"Consumer thread $threadId started")
 
         try
-          while true do
+          while running.get() do
             val records = consumer.poll(Duration.ofMillis(100))
             val it = records.iterator()
             while it.hasNext do
@@ -67,7 +74,11 @@ object TestConsumer:
                 val sum = readVarint(in)
                 resultCounter.incrementAndGet()
         catch
-          case e: Exception => logger.error(s"Consumer thread $threadId failed", e)
+          case e: Exception => if (running.get()) logger.error(s"Consumer thread $threadId failed", e)
         finally
           consumer.close()
-      }).start()
+      })
+      thread.start()
+      thread
+
+    threads.foreach(_.join())
