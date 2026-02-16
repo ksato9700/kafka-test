@@ -9,13 +9,14 @@ import org.slf4j.{Logger, LoggerFactory}
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.time.Duration
 import java.util.{Arrays, Collections, Properties}
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong}
 import java.util.concurrent.{Executors, TimeUnit}
 import scala.jdk.CollectionConverters.*
 
 object StreamSumApp:
   private val logger: Logger = LoggerFactory.getLogger(getClass)
   private val messageCounter = new AtomicLong(0)
+  private val running = new AtomicBoolean(true)
 
   private def createTopics(bootstrapServers: String, topics: List[String]): Unit =
     val props = new Properties()
@@ -67,7 +68,13 @@ object StreamSumApp:
 
     logger.info(s"🚀 Starting Ultra-Performance Scala Workers: $numWorkers")
 
-    for i <- 0 until numWorkers do
+    Runtime.getRuntime.addShutdownHook(new Thread(() => {
+      logger.info("🛑 Shutting down Scala stream processor...")
+      running.set(false)
+      reporter.shutdown()
+    }))
+
+    val threads = for i <- 0 until numWorkers yield
       val workerId = i
       val thread = new Thread(() => {
         val prodProps = new Properties()
@@ -97,8 +104,8 @@ object StreamSumApp:
         logger.info(s"Worker thread $workerId started")
 
         try
-          while true do
-            val records = consumer.poll(Duration.ofMillis(10))
+          while running.get() do
+            val records = consumer.poll(Duration.ofMillis(100))
             val it = records.iterator()
             while it.hasNext do
               val record = it.next()
@@ -125,10 +132,13 @@ object StreamSumApp:
                   messageCounter.addAndGet(localCounter)
                   localCounter = 0
         catch
-          case e: Exception => logger.error(s"Worker $workerId failed", e)
+          case e: Exception => if (running.get()) logger.error(s"Worker $workerId failed", e)
         finally
           producer.close()
           consumer.close()
       })
       thread.setName(s"worker-$i")
       thread.start()
+      thread
+
+    threads.foreach(_.join())

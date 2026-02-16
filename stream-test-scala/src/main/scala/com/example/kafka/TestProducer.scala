@@ -6,12 +6,14 @@ import org.slf4j.{Logger, LoggerFactory}
 
 import java.io.ByteArrayOutputStream
 import java.util.Properties
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.{Executors, ThreadLocalRandom, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 
 object TestProducer:
   private val logger: Logger = LoggerFactory.getLogger(getClass)
   private val sendCounter = new AtomicLong(0)
+  private val running = new AtomicBoolean(true)
 
   private def writeVarint(out: ByteArrayOutputStream, n: Long): Unit =
     var val_res = (n << 1) ^ (n >> 63)
@@ -34,9 +36,15 @@ object TestProducer:
 
     logger.info(s"🚀 Starting Ultra-Performance Scala Producers: $numThreads")
 
-    for i <- 0 until numThreads do
+    Runtime.getRuntime.addShutdownHook(new Thread(() => {
+      logger.info("🛑 Shutting down Scala producers...")
+      running.set(false)
+      reporter.shutdown()
+    }))
+
+    val threads = for i <- 0 until numThreads yield
       val threadId = i
-      new Thread(() => {
+      val thread = new Thread(() => {
         val props = new Properties()
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers)
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, classOf[ByteArraySerializer].getName)
@@ -54,7 +62,7 @@ object TestProducer:
         logger.info(s"Producer thread $threadId started")
 
         try
-          while true do
+          while running.get() do
             out.reset()
             val count = random.nextInt(2, 6)
             writeVarint(out, count.toLong)
@@ -67,7 +75,11 @@ object TestProducer:
             producer.send(new ProducerRecord(topic, null, out.toByteArray))
             sendCounter.incrementAndGet()
         catch
-          case e: Exception => logger.error(s"Producer thread $threadId failed", e)
+          case e: Exception => if (running.get()) logger.error(s"Producer thread $threadId failed", e)
         finally
           producer.close()
-      }).start()
+      })
+      thread.start()
+      thread
+
+    threads.foreach(_.join())
