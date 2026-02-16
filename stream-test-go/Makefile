@@ -1,10 +1,13 @@
 .PHONY: run-stream run-producer run-consumer docker-build docker-run
 
+NUM_WORKERS ?= 8
+PRODUCER_THREADS ?= 2
+
 run-stream:
-	go run cmd/processor/main.go
+	NUM_WORKERS=$(NUM_WORKERS) go run cmd/processor/main.go
 
 run-producer:
-	go run cmd/producer/main.go
+	PRODUCER_THREADS=$(PRODUCER_THREADS) go run cmd/producer/main.go
 
 run-consumer:
 	go run cmd/consumer/main.go
