@@ -13,19 +13,10 @@ import (
 
 var sendCounter uint64
 
-func writeVarint(buf []byte, n int64) []byte {
-	val := uint64((n << 1) ^ (n >> 63))
-	for val >= 0x80 {
-		buf = append(buf, uint8(val)|0x80)
-		val >>= 7
-	}
-	return append(buf, uint8(val))
-}
-
 func main() {
 	bootstrapServers := getEnv("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:9094")
 	topic := getEnv("INPUT_TOPIC", "integer-list-input-avro")
-	numProducers, _ := strconv.Atoi(getEnv("PRODUCER_THREADS", "3"))
+	numProducers, _ := strconv.Atoi(getEnv("PRODUCER_THREADS", "4"))
 
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
@@ -37,7 +28,7 @@ func main() {
 		}
 	}()
 
-	fmt.Printf("🚀 Starting High-Performance Go Producer with %d threads...\n", numProducers)
+	fmt.Printf("🚀 Starting Ultra-Performance Go Producer with %d threads...\n", numProducers)
 
 	for i := 0; i < numProducers; i++ {
 		go func(id int) {
@@ -54,19 +45,31 @@ func main() {
 			}
 			defer producer.Close()
 
-			fmt.Printf("Producer thread %d started\n", id)
 			r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(id)))
-			buf := make([]byte, 0, 128)
 
 			for {
-				buf = buf[:0]
 				count := int64(r.Intn(4) + 2) // 2-5
+				// Allocate new slice for every message to avoid race conditions in Produce()
+				buf := make([]byte, 0, 32)
 
-				buf = writeVarint(buf, count)
-				for j := 0; j < int(count); j++ {
-					buf = writeVarint(buf, int64(r.Intn(100)))
+				// Encode count
+				v_c := uint64((count << 1) ^ (count >> 63))
+				for v_c >= 0x80 {
+					buf = append(buf, uint8(v_c)|0x80)
+					v_c >>= 7
 				}
-				buf = writeVarint(buf, 0)
+				buf = append(buf, uint8(v_c))
+
+				for j := 0; j < int(count); j++ {
+					n := int64(r.Intn(100))
+					v_n := uint64((n << 1) ^ (n >> 63))
+					for v_n >= 0x80 {
+						buf = append(buf, uint8(v_n)|0x80)
+						v_n >>= 7
+					}
+					buf = append(buf, uint8(v_n))
+				}
+				buf = append(buf, 0) // End of array
 
 				producer.Produce(&kafka.Message{
 					TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
