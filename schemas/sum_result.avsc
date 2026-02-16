@@ -1,0 +1,8 @@
+{
+  "type": "record",
+  "name": "SumResult",
+  "namespace": "com.example.kafka",
+  "fields": [
+    {"name": "sum", "type": "long"}
+  ]
+}
