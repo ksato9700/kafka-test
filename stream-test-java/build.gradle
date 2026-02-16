@@ -1,0 +1,44 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.apache.kafka:kafka-streams:3.7.0'
+    implementation 'org.apache.avro:avro:1.11.3'
+    implementation 'org.slf4j:slf4j-api:2.0.12'
+    implementation 'ch.qos.logback:logback-classic:1.5.3'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.0'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+application {
+    mainClass = 'com.example.kafka.StreamSumApp'
+}
+
+task runStream(type: JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.kafka.StreamSumApp'
+    standardInput = System.in
+}
+
+task runProducer(type: JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.kafka.TestProducer'
+    standardInput = System.in
+}
+
+task runConsumer(type: JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.kafka.TestConsumer'
+    standardInput = System.in
+}
