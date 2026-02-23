@@ -47,12 +47,20 @@ func main() {
 	if os.Getenv("BENCHMARK") != "" {
 		fmt.Printf("🚀 Phase 1: Loading %d records (Go)...\n", totalRecords)
 		p, _ := kafka.NewProducer(&kafka.ConfigMap{
-			"bootstrap.servers":     bootstrapServers,
-			"broker.address.family": "v4",
-			"compression.type":      "snappy",
-			"batch.num.messages":    100000,
+			"bootstrap.servers":            bootstrapServers,
+			"broker.address.family":        "v4",
+			"compression.type":             "snappy",
+			"linger.ms":                    20,
+			"batch.num.messages":           100000,
+			"queue.buffering.max.messages": 1000000,
 		})
 		
+		// Drain events to prevent deadlock
+		go func() {
+			for range p.Events() {
+			}
+		}()
+
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		for i := 0; i < totalRecords; i++ {
 			buf := make([]byte, 0, 32)
@@ -60,10 +68,21 @@ func main() {
 			buf = writeVarint(buf, count)
 			for j := 0; j < int(count); j++ { buf = writeVarint(buf, int64(r.Intn(100))) }
 			buf = writeVarint(buf, 0)
-			p.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &inputTopic, Partition: kafka.PartitionAny}, Value: buf}, nil)
+			
+			for {
+				err := p.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &inputTopic, Partition: kafka.PartitionAny}, Value: buf}, nil)
+				if err != nil {
+					if err.(kafka.Error).Code() == kafka.ErrQueueFull {
+						time.Sleep(10 * time.Millisecond)
+						continue
+					}
+					fmt.Printf("Produce error: %v\n", err)
+				}
+				break
+			}
 		}
 		fmt.Println("Flushing producer...")
-		p.Flush(30000)
+		p.Flush(60000)
 		p.Close()
 		fmt.Println("✅ Phase 1 Complete.")
 	}
@@ -113,18 +132,29 @@ func startWorker(id int, bootstrap, inputTopic, outputTopic, groupID string) {
 	c, _ := kafka.NewConsumer(config)
 	defer c.Close()
 	p, _ := kafka.NewProducer(&kafka.ConfigMap{
-		"bootstrap.servers": bootstrap,
-		"broker.address.family": "v4",
-		"compression.type": "snappy",
-		"batch.num.messages": 100000,
+		"bootstrap.servers":            bootstrap,
+		"broker.address.family":        "v4",
+		"compression.type":             "snappy",
+		"linger.ms":                    20,
+		"batch.num.messages":           100000,
+		"queue.buffering.max.messages": 1000000,
 	})
 	defer p.Close()
+
+	// Drain events to prevent deadlock
+	go func() {
+		for range p.Events() {
+		}
+	}()
 
 	c.Subscribe(inputTopic, nil)
 	var localCounter uint64
 
 	for {
-		if atomic.LoadUint64(&processedCounter) >= totalRecords { return }
+		if atomic.LoadUint64(&processedCounter) >= totalRecords {
+			p.Flush(5000)
+			return
+		}
 		ev := c.Poll(100)
 		if ev == nil { continue }
 
@@ -160,7 +190,17 @@ func startWorker(id int, bootstrap, inputTopic, outputTopic, groupID string) {
 			for v_enc >= 0x80 { out = append(out, uint8(v_enc)|0x80); v_enc >>= 7 }
 			out = append(out, uint8(v_enc))
 
-			p.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &outputTopic, Partition: kafka.PartitionAny}, Value: out, Key: e.Key}, nil)
+			for {
+				err := p.Produce(&kafka.Message{TopicPartition: kafka.TopicPartition{Topic: &outputTopic, Partition: kafka.PartitionAny}, Value: out, Key: e.Key}, nil)
+				if err != nil {
+					if err.(kafka.Error).Code() == kafka.ErrQueueFull {
+						time.Sleep(10 * time.Millisecond)
+						continue
+					}
+				}
+				break
+			}
+
 			localCounter++
 			if localCounter >= 1000 {
 				atomic.AddUint64(&processedCounter, localCounter)
