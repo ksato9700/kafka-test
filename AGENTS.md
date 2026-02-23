@@ -40,6 +40,21 @@ If you are asked to add a new language (e.g., Go, Node.js, C#):
 - [ ] Verify local execution against `localhost:9094`.
 - [ ] Verify Docker execution against `kafka-broker:9092` using `kafka-net`.
 
+## ⚡ High-Performance Benchmark Guidelines (`stream-test-*`)
+
+The benchmark implementations have stricter performance requirements and use a different methodology:
+
+1.  **Zero-Allocation SerDe:**
+    -   Use manual **Zig-Zag binary encoding** (LEB128) instead of generic Avro libraries to eliminate reflection and allocation overhead.
+    -   Reuse buffers across messages where possible.
+2.  **Concurrency Model:**
+    -   Use multiple worker threads/processes, each with its own isolated Kafka Consumer and Producer.
+    -   Avoid shared state or global locks in the hot path.
+3.  **Batch Benchmark Mode:**
+    -   Implement a "Load Phase" that pre-fills a topic with 50M records.
+    -   Implement a "Process Phase" that stops once the target count is reached.
+    -   Must handle `kafka.ErrQueueFull` (Go) or `BufferError` (Python) with efficient polling to avoid deadlocks.
+
 ## 🐛 Common Pitfalls to Avoid
 
 -   **Milliseconds vs Seconds:** Ensure timestamp math is consistent.
