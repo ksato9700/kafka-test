@@ -9,39 +9,22 @@ To provide a standardized benchmark for comparing Kafka streaming performance ac
 - **Pattern**: Pipe-and-Filter (Consume -> Transform -> Produce)
 - **State**: Stateless (each message is processed independently)
 
-## 3. Data Specification (Avro)
+## 3. Data Specification (Zig-Zag Binary)
 
-Implementation must use binary Avro serialization without a Schema Registry for maximum throughput in testing.
+For "Extreme Performance" benchmarks, implementations should use manual **Zig-Zag binary encoding** (LEB128) instead of generic Avro libraries. This eliminates reflection and object allocation overhead.
 
 ### Input: `IntegerList`
-```json
-{
-  "type": "record",
-  "name": "IntegerList",
-  "namespace": "com.example.kafka",
-  "fields": [
-    {"name": "numbers", "type": {"type": "array", "items": "int"}}
-  ]
-}
-```
+- **Format**: `[Count (Zig-Zag)][Int1 (Zig-Zag)][Int2 (Zig-Zag)]...[0]`
+- The array ends with a `0` (or the count specifies the length).
 
 ### Output: `SumResult`
-```json
-{
-  "type": "record",
-  "name": "SumResult",
-  "namespace": "com.example.kafka",
-  "fields": [
-    {"name": "sum", "type": "long"}
-  ]
-}
-```
+- **Format**: `[Sum (Zig-Zag Long)]`
 
 ## 4. Program Logic
 For every message received:
-1. Decode the binary Avro payload into a list of integers.
+1. Decode the binary payload (Zig-Zag).
 2. Calculate the sum of the integers.
-3. Encode the sum into a `SumResult` binary Avro payload.
+3. Encode the sum into a Zig-Zag binary payload.
 4. Send the result to the sink topic.
 
 ## 5. Performance Requirements & Optimizations
@@ -50,32 +33,32 @@ To ensure valid performance comparisons, implementations should adhere to these 
 
 ### Monitoring
 - The program must track the number of messages processed.
-- Every 5 seconds, it must log the average throughput: `(current_count - previous_count) / 5`.
+- Every second (or 5s), it should log progress if in Benchmark mode.
 
 ### Optimizations
-- **Object Reuse**: Avoid allocating new encoders, decoders, or buffers per message. Use thread-local storage or object pooling.
-- **Batching**: Use a producer batch size of at least 64KB and a linger time of 10-20ms.
-- **Compression**: Use `snappy` compression for production.
-- **Multi-threading**: The implementation should support configurable parallelism (e.g., via environment variables) to match the number of Kafka topic partitions.
+- **Zero-Allocation**: Reuse buffers and avoid per-message allocations.
+- **Batching**: Use a producer batch size of at least 100,000 messages and a linger time of 20ms.
+- **Compression**: Use `snappy` compression.
+- **Multi-threading**: The implementation should support configurable parallelism via `NUM_WORKERS`.
 
 ## 6. Batch Benchmark Methodology
 To ensure a fair comparison without resource contention from the producer, implementations should support a "Batch Benchmark" mode:
-1. **Load Phase**: Produce 10,000,000 messages to the input topic as fast as possible.
+1. **Load Phase**: Produce 50,000,000 messages to the input topic as fast as possible.
 2. **Flush**: Ensure all messages are fully acknowledged by the broker.
 3. **Process Phase**: 
     - Start a timer.
-    - Consume and process exactly 10,000,000 messages.
+    - Consume and process exactly 50,000,000 messages.
     - Produce results to the output topic.
-    - Stop the timer when the 10,000,000th result is produced.
-4. **Result**: Calculate `10,000,000 / total_seconds` for the final score.
+    - Stop the timer when the 50,000,000th result is produced.
+4. **Result**: Calculate `50,000,000 / total_seconds` for the final score.
 
 ## 7. Implementation Checklist
-- [ ] Implement Avro serialization/deserialization logic.
-- [ ] Connect to Kafka using configurable bootstrap servers.
-- [ ] Implement the sum transformation.
-- [ ] Add the 5-second throughput reporting logic.
-- [ ] Ensure the producer is tuned for high throughput (batching/compression).
-- [ ] Provide a `Makefile` and `Dockerfile` for consistent deployment.
+- [x] Implement manual Zig-Zag serialization/deserialization logic.
+- [x] Connect to Kafka using configurable bootstrap servers.
+- [x] Implement the sum transformation.
+- [x] Add throughput reporting logic.
+- [x] Ensure the producer is tuned for high throughput (batching/compression).
+- [x] Provide a `Makefile` and `Dockerfile` for consistent deployment.
 
 ## 7. Standard Topic Configuration
 For benchmarking, topics should be pre-created with:

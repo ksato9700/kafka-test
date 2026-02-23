@@ -41,7 +41,33 @@ The consumer should immediately start receiving messages sent by the producer. Y
 - **`kafka-test-java/`**: Java implementation (`kafka-clients` via Gradle).
 - **`kafka-test-scala/`**: Scala implementation (`kafka-clients` via SBT).
 - **`kafka-test-ruby/`**: Ruby implementation (`rdkafka-ruby`).
+- **`stream-test-*/`**: High-performance streaming benchmarks (Java, Rust, Go, Python, C).
+- **`schemas/`**: Shared Avro schemas.
 - **`docs/`**: Design documents and specifications.
+
+## 🏁 Streaming Performance Benchmarks
+
+In addition to the standard clients, this repository includes a high-performance **Streaming Sum Benchmark**. This test measures the maximum throughput for a stateful "integer sum" transformation on a backlog of 50 million records.
+
+### Benchmark Results
+Current results (50M records, 8 workers):
+- **Java**: ~6.3M msg/sec (Peak)
+- **C**: ~4.5M msg/sec
+- **Rust**: ~3.5M msg/sec
+- **Go**: ~2.4M msg/sec
+
+See [BENCHMARK_SUMMARY.md](./BENCHMARK_SUMMARY.md) for full details.
+
+### Running a Benchmark
+Each language in `stream-test-*` supports a standardized "Batch Benchmark Mode":
+
+```bash
+cd stream-test-rust
+make run-benchmark
+```
+This will:
+1. **Load Phase**: Produce 50,000,000 records to the input topic.
+2. **Process Phase**: Consume, transform (calculate sum), and produce results while measuring throughput.
 
 ## 🛠️ Local Development
 
