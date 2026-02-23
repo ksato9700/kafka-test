@@ -9,6 +9,9 @@ run-producer:
 run-consumer:
 	uv run bin/consumer.py
 
+run-benchmark:
+	BENCHMARK=1 NUM_WORKERS=8 uv run bin/processor.py
+
 docker-build:
 	cd .. && docker build -f stream-test-python/Dockerfile -t stream-test-python .
 

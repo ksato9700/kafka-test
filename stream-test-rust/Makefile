@@ -12,6 +12,9 @@ run-producer:
 run-consumer:
 	cargo run --release --bin consumer
 
+run-benchmark:
+	BENCHMARK=1 NUM_WORKERS=8 cargo run --release --bin processor
+
 docker-build:
 	cd .. && docker build -f stream-test-rust/Dockerfile -t stream-test-rust .
 

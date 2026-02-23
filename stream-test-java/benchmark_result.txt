@@ -1,0 +1,81 @@
+STREAMS_NUM_STREAM_THREADS=8 gradle runBenchmark --console=plain
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+
+> Task :runBenchmark
+2026-02-23 21:24:19 INFO  c.example.kafka.StreamSumBenchmark - 🚀 Phase 1: Loading 50000000 records into Kafka...
+2026-02-23 21:24:29 INFO  c.example.kafka.StreamSumBenchmark - ✅ Phase 1 Complete.
+2026-02-23 21:24:29 INFO  c.example.kafka.StreamSumBenchmark - 🚀 Phase 2: Processing backlog with 8 workers...
+2026-02-23 21:24:29 INFO  c.example.kafka.StreamSumBenchmark - Waiting for Kafka rebalance and first message...
+2026-02-23 21:24:36 INFO  c.example.kafka.StreamSumBenchmark - Progress: 3% (1740137 / 50000000)
+2026-02-23 21:24:37 INFO  c.example.kafka.StreamSumBenchmark - Progress: 14% (7201644 / 50000000)
+2026-02-23 21:24:38 INFO  c.example.kafka.StreamSumBenchmark - Progress: 28% (14283976 / 50000000)
+2026-02-23 21:24:39 INFO  c.example.kafka.StreamSumBenchmark - Progress: 44% (22347526 / 50000000)
+2026-02-23 21:24:40 INFO  c.example.kafka.StreamSumBenchmark - Progress: 61% (30591904 / 50000000)
+2026-02-23 21:24:41 INFO  c.example.kafka.StreamSumBenchmark - Progress: 77% (38945177 / 50000000)
+2026-02-23 21:24:42 INFO  c.example.kafka.StreamSumBenchmark - Progress: 92% (46137844 / 50000000)
+2026-02-23 21:24:43 INFO  c.example.kafka.StreamSumBenchmark - Progress: 99% (49691489 / 50000000)
+2026-02-23 21:24:44 INFO  c.example.kafka.StreamSumBenchmark - Progress: 99% (49949656 / 50000000)
+2026-02-23 21:24:45 INFO  c.example.kafka.StreamSumBenchmark - Progress: 100% (50000000 / 50000000)
+2026-02-23 21:24:45 INFO  c.example.kafka.StreamSumBenchmark - 🏁 BENCHMARK RESULT (JAVA) 🏁
+2026-02-23 21:24:45 INFO  c.example.kafka.StreamSumBenchmark - Total Records: 50000000
+2026-02-23 21:24:45 INFO  c.example.kafka.StreamSumBenchmark - Actual Processing Time: 9.65 seconds
+2026-02-23 21:24:45 INFO  c.example.kafka.StreamSumBenchmark - Throughput:             5183488 messages/sec
+
+BUILD SUCCESSFUL in 26s
+3 actionable tasks: 1 executed, 2 up-to-date
+
+STREAMS_NUM_STREAM_THREADS=8 gradle runBenchmark --console=plain
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+
+> Task :runBenchmark
+2026-02-23 21:26:06 INFO  c.example.kafka.StreamSumBenchmark - 🚀 Phase 1: Loading 50000000 records into Kafka...
+2026-02-23 21:26:16 INFO  c.example.kafka.StreamSumBenchmark - ✅ Phase 1 Complete.
+2026-02-23 21:26:16 INFO  c.example.kafka.StreamSumBenchmark - 🚀 Phase 2: Processing backlog with 8 workers...
+2026-02-23 21:26:16 INFO  c.example.kafka.StreamSumBenchmark - Waiting for Kafka rebalance and first message...
+2026-02-23 21:26:23 INFO  c.example.kafka.StreamSumBenchmark - Progress: 1% (997288 / 50000000)
+2026-02-23 21:26:24 INFO  c.example.kafka.StreamSumBenchmark - Progress: 4% (2193603 / 50000000)
+2026-02-23 21:26:25 INFO  c.example.kafka.StreamSumBenchmark - Progress: 7% (3664184 / 50000000)
+2026-02-23 21:26:26 INFO  c.example.kafka.StreamSumBenchmark - Progress: 15% (7891604 / 50000000)
+2026-02-23 21:26:27 INFO  c.example.kafka.StreamSumBenchmark - Progress: 27% (13880704 / 50000000)
+2026-02-23 21:26:28 INFO  c.example.kafka.StreamSumBenchmark - Progress: 37% (18641645 / 50000000)
+2026-02-23 21:26:29 INFO  c.example.kafka.StreamSumBenchmark - Progress: 50% (25037550 / 50000000)
+2026-02-23 21:26:30 INFO  c.example.kafka.StreamSumBenchmark - Progress: 61% (30687633 / 50000000)
+2026-02-23 21:26:31 INFO  c.example.kafka.StreamSumBenchmark - Progress: 76% (38332137 / 50000000)
+2026-02-23 21:26:32 INFO  c.example.kafka.StreamSumBenchmark - Progress: 90% (45142108 / 50000000)
+2026-02-23 21:26:33 INFO  c.example.kafka.StreamSumBenchmark - 🏁 BENCHMARK RESULT (JAVA) 🏁
+2026-02-23 21:26:33 INFO  c.example.kafka.StreamSumBenchmark - Total Records: 50000000
+2026-02-23 21:26:33 INFO  c.example.kafka.StreamSumBenchmark - Actual Processing Time: 10.71 seconds
+2026-02-23 21:26:33 INFO  c.example.kafka.StreamSumBenchmark - Throughput:             4666911 messages/sec
+
+BUILD SUCCESSFUL in 27s
+3 actionable tasks: 1 executed, 2 up-to-date
+
+STREAMS_NUM_STREAM_THREADS=8 gradle runBenchmark --console=plain
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+
+> Task :runBenchmark
+2026-02-23 21:26:39 INFO  c.example.kafka.StreamSumBenchmark - 🚀 Phase 1: Loading 50000000 records into Kafka...
+2026-02-23 21:26:49 INFO  c.example.kafka.StreamSumBenchmark - ✅ Phase 1 Complete.
+2026-02-23 21:26:49 INFO  c.example.kafka.StreamSumBenchmark - 🚀 Phase 2: Processing backlog with 8 workers...
+2026-02-23 21:26:49 INFO  c.example.kafka.StreamSumBenchmark - Waiting for Kafka rebalance and first message...
+2026-02-23 21:26:56 INFO  c.example.kafka.StreamSumBenchmark - Progress: 2% (1420586 / 50000000)
+2026-02-23 21:26:57 INFO  c.example.kafka.StreamSumBenchmark - Progress: 7% (3737517 / 50000000)
+2026-02-23 21:26:58 INFO  c.example.kafka.StreamSumBenchmark - Progress: 19% (9770295 / 50000000)
+2026-02-23 21:26:59 INFO  c.example.kafka.StreamSumBenchmark - Progress: 34% (17340915 / 50000000)
+2026-02-23 21:27:00 INFO  c.example.kafka.StreamSumBenchmark - Progress: 49% (24684272 / 50000000)
+2026-02-23 21:27:01 INFO  c.example.kafka.StreamSumBenchmark - Progress: 63% (31947393 / 50000000)
+2026-02-23 21:27:02 INFO  c.example.kafka.StreamSumBenchmark - Progress: 81% (40569309 / 50000000)
+2026-02-23 21:27:03 INFO  c.example.kafka.StreamSumBenchmark - Progress: 100% (50000007 / 50000000)
+2026-02-23 21:27:03 INFO  c.example.kafka.StreamSumBenchmark - 🏁 BENCHMARK RESULT (JAVA) 🏁
+2026-02-23 21:27:03 INFO  c.example.kafka.StreamSumBenchmark - Total Records: 50000000
+2026-02-23 21:27:03 INFO  c.example.kafka.StreamSumBenchmark - Actual Processing Time: 7.92 seconds
+2026-02-23 21:27:03 INFO  c.example.kafka.StreamSumBenchmark - Throughput:             6312468 messages/sec
+
+BUILD SUCCESSFUL in 24s
+3 actionable tasks: 1 executed, 2 up-to-date

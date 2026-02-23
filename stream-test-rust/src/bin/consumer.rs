@@ -1,28 +1,29 @@
-use apache_avro::{from_avro_datum, types::Value, Schema};
 use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use std::env;
-use std::fs;
-use std::sync::Arc;
+use std::time::Duration;
 
-fn load_schema(file_name: &str) -> Schema {
-    let paths = [format!("../schemas/{}", file_name), format!("schemas/{}", file_name)];
-    for path in paths {
-        if let Ok(content) = fs::read_to_string(&path) {
-            return Schema::parse_str(&content).expect("Failed to parse schema");
+fn read_varint(reader: &mut &[u8]) -> i64 {
+    let mut val: u64 = 0;
+    let mut shift = 0;
+    loop {
+        let b = reader[0];
+        *reader = &(*reader)[1..];
+        val |= ((b & 0x7F) as u64) << shift;
+        if b & 0x80 == 0 {
+            break;
         }
+        shift += 7;
     }
-    panic!("Schema file not found: {}", file_name);
+    ((val >> 1) as i64) ^ -((val & 1) as i64)
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let bootstrap_servers = env::var("KAFKA_BOOTSTRAP_SERVERS").unwrap_or_else(|_| "127.0.0.1:9094".to_string());
     let topic = env::var("OUTPUT_TOPIC").unwrap_or_else(|_| "integer-sum-output-avro".to_string());
-    let schema = Arc::new(load_schema("sum_result.avsc"));
 
-    let consumer: StreamConsumer = ClientConfig::new()
+    let consumer: BaseConsumer = ClientConfig::new()
         .set("bootstrap.servers", &bootstrap_servers)
         .set("broker.address.family", "v4")
         .set("group.id", "rust-test-consumer-group")
@@ -36,22 +37,11 @@ async fn main() {
     println!("🚀 Waiting for Avro results on topic: {}...", topic);
 
     loop {
-        match consumer.recv().await {
-            Ok(m) => {
-                if let Some(payload) = m.payload() {
-                    let mut reader = payload;
-                    if let Ok(Value::Record(fields)) = from_avro_datum(&schema, &mut reader, None) {
-                        for (name, val) in fields {
-                            if name == "sum" {
-                                if let Value::Long(s) = val {
-                                    println!("Received Avro Result: sum={}", s);
-                                }
-                            }
-                        }
-                    }
-                }
+        if let Some(Ok(m)) = consumer.poll(Duration::from_millis(100)) {
+            if let Some(mut payload) = m.payload() {
+                let sum = read_varint(&mut payload);
+                println!("Received Avro Result: sum={}", sum);
             }
-            Err(e) => eprintln!("Consumer error: {}", e),
         }
     }
 }

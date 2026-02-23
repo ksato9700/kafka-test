@@ -58,7 +58,18 @@ To ensure valid performance comparisons, implementations should adhere to these 
 - **Compression**: Use `snappy` compression for production.
 - **Multi-threading**: The implementation should support configurable parallelism (e.g., via environment variables) to match the number of Kafka topic partitions.
 
-## 6. Implementation Checklist
+## 6. Batch Benchmark Methodology
+To ensure a fair comparison without resource contention from the producer, implementations should support a "Batch Benchmark" mode:
+1. **Load Phase**: Produce 10,000,000 messages to the input topic as fast as possible.
+2. **Flush**: Ensure all messages are fully acknowledged by the broker.
+3. **Process Phase**: 
+    - Start a timer.
+    - Consume and process exactly 10,000,000 messages.
+    - Produce results to the output topic.
+    - Stop the timer when the 10,000,000th result is produced.
+4. **Result**: Calculate `10,000,000 / total_seconds` for the final score.
+
+## 7. Implementation Checklist
 - [ ] Implement Avro serialization/deserialization logic.
 - [ ] Connect to Kafka using configurable bootstrap servers.
 - [ ] Implement the sum transformation.

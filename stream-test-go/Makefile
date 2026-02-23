@@ -12,6 +12,9 @@ run-producer:
 run-consumer:
 	go run cmd/consumer/main.go
 
+run-benchmark:
+	BENCHMARK=1 NUM_WORKERS=8 go run cmd/processor/main.go
+
 docker-build:
 	cd .. && docker build -f stream-test-go/Dockerfile -t stream-test-go .
 
