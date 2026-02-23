@@ -5,7 +5,7 @@
 | **Java** | 7.92 seconds | 6,312,468 msg/sec |
 | **C** | 10.59 seconds | 4,719,502 msg/sec |
 | **Rust** | 14.29 seconds | 3,499,934 msg/sec |
-| **Go** | 21.72 seconds | 2,301,985 msg/sec |
+| **Go** | 20.43 seconds | 2,447,551 msg/sec |
 
 ## Key Observations
 *   **Java** achieved the highest peak performance, reaching over 6.3 million messages per second.

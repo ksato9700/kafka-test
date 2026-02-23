@@ -1,0 +1,77 @@
+BENCHMARK=1 NUM_WORKERS=8 go run cmd/processor/main.go
+🚀 Phase 1: Loading 50000000 records (Go)...
+Flushing producer...
+BENCHMARK=1 NUM_WORKERS=8 go run cmd/processor/main.go
+🚀 Phase 1: Loading 50000000 records (Go)...
+Flushing producer...
+✅ Phase 1 Complete.
+🚀 Phase 2: Processing backlog with 8 workers...
+Progress: 3% (1934000 / 50000000)
+Progress: 9% (4680000 / 50000000)
+Progress: 15% (7536000 / 50000000)
+Progress: 22% (11402000 / 50000000)
+Progress: 30% (15089000 / 50000000)
+Progress: 35% (17604000 / 50000000)
+Progress: 39% (19912000 / 50000000)
+Progress: 42% (21057000 / 50000000)
+Progress: 45% (22885000 / 50000000)
+Progress: 47% (23764000 / 50000000)
+Progress: 54% (27159000 / 50000000)
+Progress: 61% (30530000 / 50000000)
+Progress: 68% (34405000 / 50000000)
+Progress: 75% (37746000 / 50000000)
+Progress: 81% (40961000 / 50000000)
+Progress: 88% (44311000 / 50000000)
+Progress: 95% (47826000 / 50000000)
+🏁 BENCHMARK RESULT (GO) 🏁
+Total Records: 50000000
+Processing Time: 23.83s
+Throughput:      2098147 msg/sec
+BENCHMARK=1 NUM_WORKERS=8 go run cmd/processor/main.go
+🚀 Phase 1: Loading 50000000 records (Go)...
+Flushing producer...
+✅ Phase 1 Complete.
+🚀 Phase 2: Processing backlog with 8 workers...
+Progress: 4% (2403000 / 50000000)
+Progress: 11% (5712000 / 50000000)
+Progress: 17% (8807000 / 50000000)
+Progress: 25% (12796000 / 50000000)
+Progress: 33% (16825000 / 50000000)
+Progress: 41% (20521000 / 50000000)
+Progress: 48% (24103000 / 50000000)
+Progress: 55% (27594000 / 50000000)
+Progress: 62% (31427000 / 50000000)
+Progress: 69% (34713000 / 50000000)
+Progress: 76% (38036000 / 50000000)
+Progress: 83% (41961000 / 50000000)
+Progress: 90% (45384000 / 50000000)
+Progress: 97% (48712000 / 50000000)
+🏁 BENCHMARK RESULT (GO) 🏁
+Total Records: 50000000
+Processing Time: 20.43s
+Throughput:      2447551 msg/sec
+BENCHMARK=1 NUM_WORKERS=8 go run cmd/processor/main.go
+🚀 Phase 1: Loading 50000000 records (Go)...
+Flushing producer...
+✅ Phase 1 Complete.
+🚀 Phase 2: Processing backlog with 8 workers...
+Progress: 3% (1504000 / 50000000)
+Progress: 7% (3965000 / 50000000)
+Progress: 13% (6815000 / 50000000)
+Progress: 19% (9914000 / 50000000)
+Progress: 26% (13427000 / 50000000)
+Progress: 32% (16060000 / 50000000)
+Progress: 38% (19090000 / 50000000)
+Progress: 44% (22166000 / 50000000)
+Progress: 49% (24805000 / 50000000)
+Progress: 56% (28151000 / 50000000)
+Progress: 63% (31658000 / 50000000)
+Progress: 70% (35202000 / 50000000)
+Progress: 76% (38402000 / 50000000)
+Progress: 83% (41924000 / 50000000)
+Progress: 89% (44944000 / 50000000)
+Progress: 96% (48311000 / 50000000)
+🏁 BENCHMARK RESULT (GO) 🏁
+Total Records: 50000000
+Processing Time: 22.62s
+Throughput:      2210823 msg/sec
