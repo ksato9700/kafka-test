@@ -1,7 +1,10 @@
 import os
 import time
+import random
 import multiprocessing
 from confluent_kafka import Consumer, Producer, KafkaError
+
+TOTAL_RECORDS = 50000000
 
 def read_varint(data, pos):
     val = 0
@@ -10,8 +13,7 @@ def read_varint(data, pos):
         b = data[pos]
         pos += 1
         val |= (b & 0x7f) << shift
-        if not (b & 0x80):
-            break
+        if not (b & 0x80): break
         shift += 7
     return (val >> 1) ^ -(val & 1), pos
 
@@ -24,98 +26,89 @@ def write_varint(n):
     buf.append(val)
     return buf
 
-def worker(worker_id, bootstrap_servers, input_topic, output_topic, group_id):
-    consumer_conf = {
+def worker(worker_id, bootstrap_servers, input_topic, output_topic, group_id, counter):
+    consumer = Consumer({
         'bootstrap.servers': bootstrap_servers,
         'group.id': group_id,
         'auto.offset.reset': 'earliest',
         'enable.auto.commit': True,
-        'fetch.min.bytes': 100000,
+        'fetch.min.bytes': 1000000,
         'broker.address.family': 'v4'
-    }
-    producer_conf = {
+    })
+    producer = Producer({
         'bootstrap.servers': bootstrap_servers,
         'compression.type': 'snappy',
         'linger.ms': 20,
         'batch.num.messages': 100000,
-        'broker.address.family': 'v4',
-        'queue.buffering.max.messages': 1000000
-    }
-
-    consumer = Consumer(consumer_conf)
-    producer = Producer(producer_conf)
+        'broker.address.family': 'v4'
+    })
     consumer.subscribe([input_topic])
 
-    print(f"🚀 Worker process {worker_id} (PID: {os.getpid()}) started")
+    local_count = 0
+    while counter.value < TOTAL_RECORDS:
+        msg = consumer.poll(0.1)
+        if msg is None: continue
+        if msg.error(): continue
 
-    msg_count = 0
-    last_report = time.time()
-
-    try:
-        while True:
-            msg = consumer.poll(0.1)
-            if msg is None:
-                continue
-            if msg.error():
-                if msg.error().code() == KafkaError._PARTITION_EOF:
-                    continue
-                else:
-                    print(f"Worker {worker_id} error: {msg.error()}")
-                    break
-
-            payload = msg.value()
-            pos = 0
-            
-            # Decode IntegerList
+        payload = msg.value()
+        pos = 0
+        count, pos = read_varint(payload, pos)
+        total_sum = 0
+        while count != 0:
+            abs_count = abs(count)
+            if count < 0: _, pos = read_varint(payload, pos)
+            for _ in range(abs_count):
+                val, pos = read_varint(payload, pos)
+                total_sum += val
             count, pos = read_varint(payload, pos)
-            total_sum = 0
-            while count != 0:
-                abs_count = abs(count)
-                if count < 0:
-                    _, pos = read_varint(payload, pos) # skip byte size
-                for _ in range(abs_count):
-                    val, pos = read_varint(payload, pos)
-                    total_sum += val
-                count, pos = read_varint(payload, pos)
 
-            # Encode SumResult
-            out_payload = bytes(write_varint(total_sum))
-            
-            # Handle Queue Full error
-            while True:
-                try:
-                    producer.produce(output_topic, value=out_payload, key=msg.key())
-                    break
-                except BufferError:
-                    producer.poll(0.1)
-            
-            producer.poll(0)
-            msg_count += 1
-            if msg_count >= 10000:
-                now = time.time()
-                elapsed = now - last_report
-                if elapsed >= 5:
-                    print(f"🚀 PID {os.getpid()} Throughput: {int(msg_count / elapsed)} messages/sec")
-                    msg_count = 0
-                    last_report = now
-    finally:
-        consumer.close()
-        producer.flush()
+        producer.produce(output_topic, value=bytes(write_varint(total_sum)), key=msg.key())
+        
+        local_count += 1
+        if local_count >= 1000:
+            with counter.get_lock():
+                counter.value += local_count
+            local_count = 0
+    
+    producer.flush()
+    consumer.close()
 
 if __name__ == "__main__":
     bootstrap_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', '127.0.0.1:9094')
-    input_topic = os.getenv('INPUT_TOPIC', 'integer-list-input-avro')
-    output_topic = os.getenv('OUTPUT_TOPIC', 'integer-sum-output-avro')
-    group_id = os.getenv('APPLICATION_ID', 'stream-sum-test-python-avro')
-    num_workers = int(os.getenv('NUM_WORKERS', '4'))
+    input_topic = "integer-list-input-benchmark"
+    output_topic = "integer-sum-output-benchmark"
+    num_workers = int(os.getenv('NUM_WORKERS', '8'))
 
-    print(f"🚀 Starting Multi-Process Python Stream Processor with {num_workers} processes...")
+    if os.getenv("BENCHMARK"):
+        print(f"🚀 Phase 1: Loading {TOTAL_RECORDS} records (Python)...")
+        p = Producer({'bootstrap.servers': bootstrap_servers, 'compression.type': 'snappy', 'broker.address.family': 'v4'})
+        for i in range(TOTAL_RECORDS):
+            list_count = random.randint(2, 5)
+            buf = write_varint(list_count)
+            for _ in range(list_count): buf += write_varint(random.randint(0, 99))
+            buf += write_varint(0)
+            p.produce(input_topic, value=bytes(buf))
+            if i % 100000 == 0: p.poll(0)
+        p.flush()
+        print("✅ Phase 1 Complete.")
 
-    processes = []
-    for i in range(num_workers):
-        p = multiprocessing.Process(target=worker, args=(i, bootstrap_servers, input_topic, output_topic, group_id))
-        p.start()
-        processes.append(p)
+    print(f"🚀 Phase 2: Processing backlog with {num_workers} processes...")
+    group_id = f"benchmark-python-{int(time.time())}"
+    counter = multiprocessing.Value('L', 0)
+    
+    start_time = time.time()
+    processes = [multiprocessing.Process(target=worker, args=(i, bootstrap_servers, input_topic, output_topic, group_id, counter)) for i in range(num_workers)]
+    for p in processes: p.start()
 
-    for p in processes:
-        p.join()
+    while counter.value < TOTAL_RECORDS:
+        time.sleep(1)
+        c = counter.value
+        if c > 0: print(f"Progress: {int(c * 100 / TOTAL_RECORDS)}% ({c} / {TOTAL_RECORDS})")
+
+    for p in processes: p.join()
+    duration = time.time() - start_time
+
+    print("🏁 BENCHMARK RESULT (PYTHON) 🏁")
+    print(f"Total Records: {TOTAL_RECORDS}")
+    print(f"Processing Time: {duration:.2f}s")
+    print(f"Throughput:      {int(TOTAL_RECORDS / duration)} msg/sec")

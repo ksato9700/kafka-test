@@ -1,0 +1,52 @@
+BENCHMARK=1 NUM_WORKERS=8 cargo run --release --bin processor
+🚀 Phase 1: Loading 50000000 records (Rust)...
+Flushing producer...
+✅ Phase 1 Complete.
+🚀 Phase 2: Processing backlog with 8 workers...
+Progress: 2% (1023000 / 50000000)
+Progress: 10% (5217000 / 50000000)
+Progress: 28% (14075000 / 50000000)
+Progress: 44% (22429000 / 50000000)
+Progress: 59% (29871000 / 50000000)
+Progress: 77% (38718000 / 50000000)
+Progress: 93% (46500000 / 50000000)
+Progress: 100% (50001000 / 50000000)
+🏁 BENCHMARK RESULT (RUST) 🏁
+Total Records: 50000000
+Processing Time: 14.29s
+Throughput:      3499934 msg/sec
+BENCHMARK=1 NUM_WORKERS=8 cargo run --release --bin processor
+🚀 Phase 1: Loading 50000000 records (Rust)...
+Flushing producer...
+✅ Phase 1 Complete.
+🚀 Phase 2: Processing backlog with 8 workers...
+Progress: 2% (1432000 / 50000000)
+Progress: 15% (7692000 / 50000000)
+Progress: 32% (16404000 / 50000000)
+Progress: 47% (23885000 / 50000000)
+Progress: 61% (30935000 / 50000000)
+Progress: 77% (38902000 / 50000000)
+Progress: 90% (45113000 / 50000000)
+Progress: 100% (50000000 / 50000000)
+🏁 BENCHMARK RESULT (RUST) 🏁
+Total Records: 50000000
+Processing Time: 14.81s
+Throughput:      3376132 msg/sec
+BENCHMARK=1 NUM_WORKERS=8 cargo run --release --bin processor
+🚀 Phase 1: Loading 50000000 records (Rust)...
+Flushing producer...
+✅ Phase 1 Complete.
+🚀 Phase 2: Processing backlog with 8 workers...
+Progress: 10% (5046000 / 50000000)
+Progress: 25% (12546000 / 50000000)
+Progress: 36% (18343000 / 50000000)
+Progress: 53% (26797000 / 50000000)
+Progress: 65% (32765000 / 50000000)
+Progress: 77% (38946000 / 50000000)
+Progress: 91% (45843000 / 50000000)
+Progress: 99% (49911000 / 50000000)
+Progress: 100% (50000000 / 50000000)
+🏁 BENCHMARK RESULT (RUST) 🏁
+Total Records: 50000000
+Processing Time: 16.14s
+Throughput:      3098814 msg/sec

@@ -42,3 +42,18 @@ task runConsumer(type: JavaExec) {
     mainClass = 'com.example.kafka.TestConsumer'
     standardInput = System.in
 }
+
+task runBenchmark(type: JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.kafka.StreamSumBenchmark'
+    standardInput = System.in
+}
+
+task runMonitor(type: JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.kafka.KafkaLagMonitor'
+    standardInput = System.in
+    if (project.hasProperty('args')) {
+        args project.args.split('\\s+')
+    }
+}

@@ -1,0 +1,51 @@
+BENCHMARK=1 NUM_WORKERS=8 ./stream-test-c
+🚀 Phase 1: Loading 50000000 records (C)...
+✅ Phase 1 Complete.
+🚀 Phase 2: Processing backlog with 8 workers...
+Worker 4 started
+Worker 3 started
+Worker 0 started
+Worker 7 started
+Worker 1 started
+Worker 2 started
+Worker 6 started
+Worker 5 started
+Progress: 1% (687737 / 50000000)Progress: 9% (4935152 / 50000000)Progress: 21% (10568068 / 50000000)Progress: 33% (16671457 / 50000000)Progress: 45% (22547422 / 50000000)Progress: 55% (27849497 / 50000000)Progress: 66% (33494685 / 50000000)Progress: 75% (37830116 / 50000000)Progress: 86% (43105950 / 50000000)Progress: 97% (48658754 / 50000000)
+🏁 BENCHMARK RESULT (C) 🏁
+Total Records: 50000000
+Processing Time: 10.59s
+Throughput:      4719502 msg/sec
+BENCHMARK=1 NUM_WORKERS=8 ./stream-test-c
+🚀 Phase 1: Loading 50000000 records (C)...
+✅ Phase 1 Complete.
+🚀 Phase 2: Processing backlog with 8 workers...
+Worker 3 started
+Worker 6 started
+Worker 4 started
+Worker 0 started
+Worker 5 started
+Worker 7 started
+Worker 2 started
+Worker 1 started
+Progress: 1% (599031 / 50000000)Progress: 7% (3966409 / 50000000)Progress: 17% (8729197 / 50000000)Progress: 28% (14462689 / 50000000)Progress: 39% (19890085 / 50000000)Progress: 50% (25043314 / 50000000)Progress: 60% (30421825 / 50000000)Progress: 70% (35345931 / 50000000)Progress: 80% (40406311 / 50000000)Progress: 89% (44863153 / 50000000)
+🏁 BENCHMARK RESULT (C) 🏁
+Total Records: 50000000
+Processing Time: 11.34s
+Throughput:      4410310 msg/sec
+BENCHMARK=1 NUM_WORKERS=8 ./stream-test-c
+🚀 Phase 1: Loading 50000000 records (C)...
+✅ Phase 1 Complete.
+🚀 Phase 2: Processing backlog with 8 workers...
+Worker 0 started
+Worker 7 started
+Worker 1 started
+Worker 3 started
+Worker 4 started
+Worker 5 started
+Worker 2 started
+Worker 6 started
+Progress: 6% (3493073 / 50000000)Progress: 15% (7905795 / 50000000)Progress: 26% (13235427 / 50000000)Progress: 37% (18876192 / 50000000)Progress: 47% (23898003 / 50000000)Progress: 59% (29548336 / 50000000)Progress: 69% (34926648 / 50000000)Progress: 80% (40194942 / 50000000)Progress: 91% (45710350 / 50000000)Progress: 97% (48765741 / 50000000)
+🏁 BENCHMARK RESULT (C) 🏁
+Total Records: 50000000
+Processing Time: 11.08s
+Throughput:      4511752 msg/sec
