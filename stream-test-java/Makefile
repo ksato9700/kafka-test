@@ -21,4 +21,7 @@ docker-build:
 	cd .. && docker build -f stream-test-java/Dockerfile -t stream-test-java .
 
 docker-run: docker-build
-	docker run --rm --network kafka-net -e KAFKA_BOOTSTRAP_SERVERS="kafka-broker:9092" stream-test-java
+	docker run --rm --network kafka-net -e KAFKA_BOOTSTRAP_SERVERS="kafka-broker:9092" stream-test-java java -cp "lib/*" com.example.kafka.StreamSumApp
+
+docker-run-benchmark: docker-build
+	docker run --rm --network kafka-net -e KAFKA_BOOTSTRAP_SERVERS="kafka-broker:9092" -e STREAMS_NUM_STREAM_THREADS=$(STREAMS_NUM_STREAM_THREADS) stream-test-java java -cp "lib/*" com.example.kafka.StreamSumBenchmark

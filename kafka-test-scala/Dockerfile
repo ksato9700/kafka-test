@@ -5,7 +5,7 @@ COPY kafka-test-scala .
 COPY schemas /app/schemas
 RUN sbt stage
 
-FROM eclipse-temurin:21-jre-alpine
+FROM amazoncorretto:21-al2023
 
 WORKDIR /app
 COPY --from=builder /app/target/universal/stage /app

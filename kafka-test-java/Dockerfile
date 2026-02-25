@@ -6,7 +6,7 @@ COPY kafka-test-java/src ./src
 COPY schemas /app/schemas
 RUN gradle installDist --no-daemon
 
-FROM eclipse-temurin:21-jre-alpine
+FROM amazoncorretto:21-al2023
 
 WORKDIR /app
 COPY --from=builder /app/build/install/kafka-test-java /app

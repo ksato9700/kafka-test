@@ -5,7 +5,7 @@ COPY stream-test-scala/build.sbt stream-test-scala/project ./project/
 COPY stream-test-scala/src ./src
 RUN sbt stage
 
-FROM eclipse-temurin:21-jre-alpine
+FROM amazoncorretto:21-al2023
 
 WORKDIR /app
 COPY --from=builder /app/target/universal/stage /app
