@@ -50,7 +50,7 @@ async fn main() {
             .expect("Time went backwards")
             .as_secs_f64();
 
-        let mut record = Record::new(&schema).unwrap();
+        let mut record = Record::new(&schema).expect("Schema is not a Record — check message.avsc");
         record.put("message_id", message_id);
         record.put("event_time", event_time);
         record.put("content", format!("Message {}", message_id));
@@ -70,7 +70,9 @@ async fn main() {
             _ = time::sleep(Duration::from_secs(2)) => {}
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("🛑 Shutting down producer...");
-                producer.flush().await.expect("Failed to flush producer");
+                if let Err(e) = producer.flush().await {
+                    tracing::error!("Failed to flush producer on shutdown: {:?}", e);
+                }
                 break;
             }
         }

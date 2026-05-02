@@ -415,7 +415,6 @@ version = "0.1.0"
 dependencies = [
  "apache-avro",
  "krafka",
- "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
