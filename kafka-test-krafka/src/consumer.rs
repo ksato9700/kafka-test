@@ -118,7 +118,7 @@ async fn main() {
                                             content,
                                             event_time
                                         );
-                                        tracing::info!("⏱️ Latency: {:.3} seconds\n", latency);
+                                        tracing::info!("⏱️ Latency: {:.3} seconds", latency);
                                     }
                                     Ok(other) => tracing::warn!("⚠️ Unexpected Avro value type: {:?}", other),
                                     Err(e) => tracing::warn!("⚠️ Avro deserialization error: {:?}", e),
@@ -131,9 +131,6 @@ async fn main() {
             }
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("🛑 Shutting down gracefully...");
-                if let Err(e) = consumer.commit().await {
-                    tracing::error!("Failed to commit offsets on shutdown: {:?}", e);
-                }
                 break;
             }
         }
