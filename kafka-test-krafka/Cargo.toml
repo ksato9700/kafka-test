@@ -1,0 +1,20 @@
+[package]
+name = "kafka-test-krafka"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+apache-avro = "0.21"
+krafka = "0.7"
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[[bin]]
+name = "kafka-producer"
+path = "src/producer.rs"
+
+[[bin]]
+name = "kafka-consumer"
+path = "src/consumer.rs"
