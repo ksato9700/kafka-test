@@ -8,13 +8,14 @@ fn read_varint(reader: &mut &[u8]) -> i64 {
         val |= ((b & 0x7F) as u64) << shift;
         if b & 0x80 == 0 { break; }
         shift += 7;
+        if shift >= 64 { break; }
     }
     ((val >> 1) as i64) ^ -((val & 1) as i64)
 }
 
 #[inline(always)]
 fn write_varint(buf: &mut Vec<u8>, n: i64) {
-    let mut val = (n << 1) ^ (n >> 63);
+    let mut val = ((n << 1) ^ (n >> 63)) as u64;
     while val >= 0x80 {
         buf.push((val as u8) | 0x80);
         val >>= 7;
@@ -47,6 +48,7 @@ mod tests {
         assert_eq!(roundtrip(127), 127);
         assert_eq!(roundtrip(128), 128);
         assert_eq!(roundtrip(300), 300);
+        assert_eq!(roundtrip(i64::MAX), i64::MAX);
     }
 
     #[test]
@@ -54,6 +56,7 @@ mod tests {
         assert_eq!(roundtrip(-1), -1);
         assert_eq!(roundtrip(-64), -64);
         assert_eq!(roundtrip(-1000), -1000);
+        assert_eq!(roundtrip(i64::MIN), i64::MIN);
     }
 
     #[test]
