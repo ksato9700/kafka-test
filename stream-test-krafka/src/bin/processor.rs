@@ -39,8 +39,6 @@ fn write_varint(buf: &mut Vec<u8>, n: i64) {
 fn main() {
     env_logger::init();
     let bootstrap = env::var("BOOTSTRAP").unwrap_or_else(|_| "127.0.0.1:9094".to_string());
-    let input_topic = "integer-list-input-benchmark";
-    let output_topic = "integer-sum-output-benchmark";
     let num_workers: usize = env::var("NUM_WORKERS")
         .unwrap_or_else(|_| "8".to_string())
         .parse()
@@ -67,7 +65,7 @@ fn main() {
                     write_varint(&mut buf, rng.gen_range(0i64..100));
                 }
                 write_varint(&mut buf, 0);
-                let _ = producer.send(input_topic, None, &buf).await;
+                let _ = producer.send("integer-list-input-benchmark", None, &buf).await;
             }
 
             println!("Flushing producer...");
@@ -78,8 +76,16 @@ fn main() {
 
     println!("🚀 Phase 2: Processing with {} workers...", num_workers);
 
+    let (p2_input, p2_output, is_benchmark) = if env::var("BENCHMARK").is_ok() {
+        ("integer-list-input-benchmark", "integer-sum-output-benchmark", true)
+    } else {
+        ("integer-list-input", "integer-sum-output", false)
+    };
+
+    let group_prefix = if is_benchmark { "benchmark-krafka" } else { "stream-krafka" };
     let group_id = format!(
-        "benchmark-krafka-{}",
+        "{}-{}",
+        group_prefix,
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -94,7 +100,11 @@ fn main() {
             std::thread::sleep(Duration::from_secs(1));
             let c = PROCESSED_COUNTER.load(Ordering::Relaxed);
             if c > 0 {
-                eprintln!("Progress: {}% ({} / {})", c * 100 / TOTAL_RECORDS, c, TOTAL_RECORDS);
+                if is_benchmark {
+                    eprintln!("Progress: {}% ({} / {})", c * 100 / TOTAL_RECORDS, c, TOTAL_RECORDS);
+                } else {
+                    eprintln!("Progress: {} records processed", c);
+                }
             }
         }
     });
@@ -104,8 +114,8 @@ fn main() {
     for _ in 0..num_workers {
         let bootstrap = bootstrap.clone();
         let group = group_id.clone();
-        let in_topic = input_topic.to_string();
-        let out_topic = output_topic.to_string();
+        let in_topic = p2_input.to_string();
+        let out_topic = p2_output.to_string();
 
         let handle = std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create worker runtime");
@@ -134,7 +144,10 @@ fn main() {
                 let mut local_counter = 0u64;
 
                 loop {
-                    if PROCESSED_COUNTER.load(Ordering::Relaxed) >= TOTAL_RECORDS {
+                    if is_benchmark && PROCESSED_COUNTER.load(Ordering::Relaxed) >= TOTAL_RECORDS {
+                        if local_counter > 0 {
+                            PROCESSED_COUNTER.fetch_add(local_counter, Ordering::Relaxed);
+                        }
                         return;
                     }
 
@@ -174,10 +187,10 @@ fn main() {
                                     if local_counter >= 1000 {
                                         let prev = PROCESSED_COUNTER
                                             .fetch_add(local_counter, Ordering::Relaxed);
-                                        if prev + local_counter >= TOTAL_RECORDS {
+                                        local_counter = 0;
+                                        if is_benchmark && prev + 1000 >= TOTAL_RECORDS {
                                             return;
                                         }
-                                        local_counter = 0;
                                     }
                                 }
                             }
@@ -198,24 +211,26 @@ fn main() {
     reporter_stop.store(1, Ordering::Relaxed);
     let _ = reporter.join();
 
-    let end_nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64;
-    let start = START_NANOS.load(Ordering::Relaxed);
-    let duration_secs = if start > 0 {
-        (end_nanos - start) as f64 / 1_000_000_000.0
-    } else {
-        1.0
-    };
+    if is_benchmark {
+        let end_nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        let start = START_NANOS.load(Ordering::Relaxed);
+        let duration_secs = if start > 0 {
+            (end_nanos - start) as f64 / 1_000_000_000.0
+        } else {
+            1.0
+        };
 
-    println!("\n🏁 BENCHMARK RESULT (KRAFKA) 🏁");
-    println!("Total Records:   {}", TOTAL_RECORDS);
-    println!("Processing Time: {:.2}s", duration_secs);
-    println!(
-        "Throughput:      {:.0} msg/sec",
-        TOTAL_RECORDS as f64 / duration_secs
-    );
+        println!("\n🏁 BENCHMARK RESULT (KRAFKA) 🏁");
+        println!("Total Records:   {}", TOTAL_RECORDS);
+        println!("Processing Time: {:.2}s", duration_secs);
+        println!(
+            "Throughput:      {:.0} msg/sec",
+            TOTAL_RECORDS as f64 / duration_secs
+        );
+    }
 }
 
 #[cfg(test)]
