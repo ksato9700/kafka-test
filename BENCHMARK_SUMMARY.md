@@ -13,3 +13,16 @@
 *   **Rust** peaked at approximately 3.5 million messages per second.
 *   **Go** processed at approximately 2.3 million messages per second, showing some overhead compared to the other compiled languages in this specific setup.
 *   All tests were performed on a backlog of 50,000,000 records.
+
+## Platform
+
+**TODO:** Platform info was not recorded for the results above. For all future runs, record:
+
+- **Machine:** (e.g. MacBook Pro M3 Pro, EC2 c5.2xlarge, etc.)
+- **CPU:** model + core count
+- **RAM:** total
+- **OS:** (e.g. macOS 15.4, Ubuntu 24.04)
+- **Kafka:** version + broker config (partitions, replication factor)
+- **JVM / runtime:** (for Java/Scala results)
+
+If re-running the existing benchmarks on the same machine, update this section with the actual platform details.
