@@ -168,6 +168,51 @@ The topic auto-creation difference is the most significant operational distincti
 | Broker compatibility | **rdkafka** | Works with any Kafka version; krafka requires 3.9+ |
 | Cross-language interop | Tie | Both encode raw Avro identically; fully interoperable |
 
-**When to choose krafka:** New projects targeting Kafka 3.9+, CI environments where installing cmake/g++ is painful, or anywhere a simpler dependency tree is valued.
+**When to choose krafka:** New projects targeting Kafka 3.9+, CI environments where installing cmake/g++ is painful, or anywhere a simpler dependency tree is valued — **provided throughput is not the priority**.
 
-**When to choose rdkafka:** Projects that need to support older brokers, rely on topic auto-creation, or prefer the stream-based consumer API.
+**When to choose rdkafka:** Any streaming or high-throughput workload, projects that need to support older brokers, or those that rely on topic auto-creation.
+
+---
+
+## Streaming Throughput
+
+Beyond the API comparison above, this repository includes `stream-test-krafka` — a streaming benchmark that mirrors the Java/C/Go/rdkafka benchmarks: produce 50 million integer-list records, then process them with 8 workers (read → sum → write).
+
+### Results (Apple M4, macOS 26.4.1, Kafka 4.2.0)
+
+| Implementation | Throughput | Processing Time |
+|---|---|---|
+| Java (Kafka Streams) | 6,312,468 msg/sec | 7.92 s |
+| C (librdkafka) | 4,719,502 msg/sec | 10.59 s |
+| **Rust (rdkafka)** | **3,499,934 msg/sec** | **14.29 s** |
+| Go (confluent-kafka-go) | 2,447,551 msg/sec | 20.43 s |
+| **Rust (krafka 0.7)** | **28,710 msg/sec** | **1741.55 s** |
+
+krafka is **~120× slower** than rdkafka and **~220× slower** than Java on this workload.
+
+### Root Cause: No Fire-and-Forget Producer
+
+The gap is not a tuning issue — it is architectural. The two clients have fundamentally different producer delivery models:
+
+**rdkafka (`ThreadedProducer`)** runs a background C thread that manages batching, compression, retries, and broker acknowledgements independently of the application thread. The application calls `produce()` and returns immediately; the record is enqueued internally. The background thread drains the queue and confirms delivery via a callback. This means the application loop never waits for the broker.
+
+**krafka** has no equivalent. Its `producer.send(...).await` is a true async future that completes only when the broker has acknowledged the message. There is no background thread, no internal queue, and no batch/pipeline API. Every send is a round-trip.
+
+In a stream processor, this matters at every message:
+
+```
+rdkafka:  consume → process → enqueue (μs) → next record immediately
+krafka:   consume → process → send → await ACK (≥ RTT) → next record
+```
+
+### What We Tried
+
+**Sequential `.await` (baseline):** Each worker called `producer.send(...).await` per message. Result: **15,101 msg/sec**.
+
+**`futures::join_all` over a poll batch:** Collect all output futures for a batch, then drive them all concurrently with `join_all`. This roughly halves send latency per batch. Result: **28,710 msg/sec** (~1.9× improvement).
+
+The `join_all` approach is the best achievable within krafka's API. Further improvement would require krafka to expose a queued/fire-and-forget send path, which it currently does not.
+
+### Conclusion
+
+krafka is well-suited for **low-throughput, latency-tolerant** workloads: administrative tools, low-volume event pipelines, CLI utilities, and applications where the simplicity of pure Rust dependencies outweighs raw throughput. It is not suitable for stream-processing workloads where each worker must process thousands to millions of messages per second.
