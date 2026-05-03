@@ -1,0 +1,28 @@
+[package]
+name = "stream-test-krafka"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "processor"
+path = "src/bin/processor.rs"
+
+[[bin]]
+name = "producer"
+path = "src/bin/producer.rs"
+
+[[bin]]
+name = "consumer"
+path = "src/bin/consumer.rs"
+
+[dependencies]
+krafka = "0.7"
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+rand = { version = "0.8", features = ["small_rng"] }
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
