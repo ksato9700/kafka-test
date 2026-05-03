@@ -1,3 +1,4 @@
+use futures::future::join_all;
 use krafka::consumer::{AutoOffsetReset, Consumer};
 use krafka::producer::Producer;
 use rand::rngs::SmallRng;
@@ -158,7 +159,6 @@ fn main() {
                     .await
                     .expect("Failed to subscribe");
 
-                let mut out_buf = Vec::with_capacity(32);
                 let mut local_counter = 0u64;
 
                 loop {
@@ -171,21 +171,28 @@ fn main() {
 
                     match consumer.poll(Duration::from_millis(100)).await {
                         Ok(records) => {
-                            for record in records {
-                                // Record start time on first message
-                                if START_NANOS.load(Ordering::Relaxed) == 0 {
-                                    let now = SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_nanos() as u64;
-                                    let _ = START_NANOS.compare_exchange(
-                                        0,
-                                        now,
-                                        Ordering::SeqCst,
-                                        Ordering::Relaxed,
-                                    );
-                                }
+                            if records.is_empty() {
+                                continue;
+                            }
 
+                            // Record start time on first non-empty batch
+                            if START_NANOS.load(Ordering::Relaxed) == 0 {
+                                let now = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_nanos() as u64;
+                                let _ = START_NANOS.compare_exchange(
+                                    0,
+                                    now,
+                                    Ordering::SeqCst,
+                                    Ordering::Relaxed,
+                                );
+                            }
+
+                            // Compute sums into owned buffers, then send all concurrently
+                            let mut bufs: Vec<Vec<u8>> = Vec::with_capacity(records.len());
+                            let mut batch_count = 0u64;
+                            for record in &records {
                                 if let Some(ref value_bytes) = record.value {
                                     let mut payload: &[u8] = value_bytes.as_ref();
                                     let mut sum: i64 = 0;
@@ -197,19 +204,27 @@ fn main() {
                                         count = read_varint(&mut payload);
                                     }
 
-                                    out_buf.clear();
-                                    write_varint(&mut out_buf, sum);
-                                    let _ = producer.send(&out_topic, None, &out_buf).await;
+                                    let mut buf = Vec::with_capacity(16);
+                                    write_varint(&mut buf, sum);
+                                    bufs.push(buf);
+                                    batch_count += 1;
+                                }
+                            }
 
-                                    local_counter += 1;
-                                    if local_counter >= 1000 {
-                                        let prev = PROCESSED_COUNTER
-                                            .fetch_add(local_counter, Ordering::Relaxed);
-                                        local_counter = 0;
-                                        if is_benchmark && prev + 1000 >= TOTAL_RECORDS {
-                                            return;
-                                        }
-                                    }
+                            // Buffers are stable in the Vec; create futures referencing them
+                            let sends: Vec<_> = bufs.iter()
+                                .map(|b| producer.send(&out_topic, None, b.as_slice()))
+                                .collect();
+                            join_all(sends).await;
+
+                            local_counter += batch_count;
+                            if local_counter >= 1000 {
+                                let flushed = local_counter;
+                                let prev = PROCESSED_COUNTER
+                                    .fetch_add(flushed, Ordering::Relaxed);
+                                local_counter = 0;
+                                if is_benchmark && prev + flushed >= TOTAL_RECORDS {
+                                    return;
                                 }
                             }
                         }

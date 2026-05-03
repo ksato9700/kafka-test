@@ -18,6 +18,7 @@ path = "src/bin/consumer.rs"
 [dependencies]
 krafka = "0.7"
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
 rand = { version = "0.8", features = ["small_rng"] }
 log = "0.4"
 env_logger = "0.11"
