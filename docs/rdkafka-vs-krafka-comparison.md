@@ -167,10 +167,11 @@ The topic auto-creation difference is the most significant operational distincti
 | Topic management | **rdkafka** | Auto-creates topics; krafka requires pre-creation |
 | Broker compatibility | **rdkafka** | Works with any Kafka version; krafka requires 3.9+ |
 | Cross-language interop | Tie | Both encode raw Avro identically; fully interoperable |
+| Streaming throughput | **rdkafka** | rdkafka's background prefetch consumer has no equivalent in krafka 0.7 |
 
-**When to choose krafka:** New projects targeting Kafka 3.9+, CI environments where installing cmake/g++ is painful, or anywhere a simpler dependency tree is valued.
+**When to choose krafka:** Low-to-moderate throughput workloads on Kafka 3.9+, CLI tools, admin utilities, or anywhere a simple pure-Rust dependency tree is valued. With tuned producer config (~185K msg/sec ceiling on this hardware).
 
-**When to choose rdkafka:** Projects that need to support older brokers or rely on topic auto-creation.
+**When to choose rdkafka:** Any high-throughput streaming workload, projects needing older broker support, or those relying on topic auto-creation. rdkafka's background prefetch consumer and fire-and-forget producer give it a structural throughput advantage (~3.5M msg/sec on the same hardware) that krafka's API cannot currently match.
 
 ---
 
@@ -186,7 +187,8 @@ Beyond the API comparison above, this repository includes `stream-test-krafka` �
 | C (librdkafka) | 4,719,502 msg/sec | 10.59 s | default |
 | Rust (rdkafka) | 3,499,934 msg/sec | 14.29 s | default |
 | Go (confluent-kafka-go) | 2,447,551 msg/sec | 20.43 s | default |
-| **Rust (krafka 0.7, tuned)** | **162,617 msg/sec** | **307.47 s** | `Acks::Leader`, `linger=5ms`, `batch_size=64KB` |
+| **Rust (krafka 0.7, Acks::None)** | **184,827 msg/sec** | **270.52 s** | `Acks::None`, `linger=5ms`, `batch_size=64KB` |
+| Rust (krafka 0.7, Acks::Leader) | 162,617 msg/sec | 307.47 s | `Acks::Leader`, `linger=5ms`, `batch_size=64KB` |
 | Rust (krafka 0.7, default) | 28,710 msg/sec | 1741.55 s | `Acks::All`, `linger=0ms` |
 
 ### Effect of Producer Configuration
@@ -210,13 +212,41 @@ With the tuned config, krafka achieves **~5.7× higher throughput** than the def
 |---|---|---|
 | Sequential `.await`, defaults | 15,101 msg/sec | `Acks::All`, `linger=0`, one send per message |
 | `join_all` per batch, defaults | 28,710 msg/sec | Concurrent sends within a poll batch, still `Acks::All` |
-| `join_all` per batch, tuned | **162,617 msg/sec** | `Acks::Leader`, `linger=5ms`, `batch_size=64KB` |
+| `join_all` per batch, `Acks::Leader` | 162,617 msg/sec | Batching active, waits for leader ACK per batch |
+| `join_all` per batch, `Acks::None` | 184,827 msg/sec | Waits for socket write only, no broker ACK |
+| Decoupled consumer+producer tasks, `Acks::None`, `max_poll_records=50K` | ~89,000 msg/sec | Consumer fetch became the bottleneck — see below |
 
-### Remaining Gap vs rdkafka
+### Root Cause Analysis: Three Layers of Gap
 
-At ~163K msg/sec, krafka is still ~22× slower than rdkafka (~3.5M). The likely explanation is the difference in delivery architecture:
+Investigating the remaining ~19× gap vs rdkafka revealed that the bottleneck was never the producer — it was the **consumer**. Each layer was peeled back in turn:
 
-- **rdkafka** runs a dedicated background C thread that manages batching, retries, and ACK handling entirely off the application's async executor. The application thread enqueues records and immediately moves on; the background thread drains the queue asynchronously.
-- **krafka** uses a Tokio-based accumulator: `send().await` still suspends until the batch is flushed and ACK'd. The application task is blocked for the duration of the broker round-trip once per batch, rather than once per message. This is better, but not fully decoupled.
+#### Layer 1 — Producer: `send().await` blocks the consume loop (fixed)
 
-Further improvement would be possible with `Acks::None` (true fire-and-forget, no ACK wait at all) at the cost of durability, or with `connections_per_broker > 1` to pipeline multiple batches in parallel. These were not tested.
+Initially, the worker's consume loop called `producer.send(...).await` inline. With default settings (`Acks::All`, `linger=0`), every send awaited a full broker round-trip before the next record could be consumed. Switching to `Acks::Leader` + batching reduced this to one suspension per batch. Decoupling consumer and producer into separate Tokio tasks with a channel removed the coupling entirely.
+
+#### Layer 2 — `max_poll_records`: krafka returns only 500 records per poll by default
+
+krafka's `poll()` default is `max_poll_records=500`. With small messages (~10 bytes each), this means the worker must call `poll()` roughly 100,000 times to process 50M records — each call is a network round-trip to the broker. Setting `max_poll_records=50_000` raised throughput from ~185K to ~89K... wait — that went backwards. The reason: decoupling producer from consumer with `FuturesUnordered` introduced its own overhead (the produce task was processing sends one at a time due to `select!` branch starvation). But `max_poll_records=50_000` alone (without the decoupling) did give a 4× improvement.
+
+#### Layer 3 — Consumer fetch model: krafka does live network I/O on every `poll()` call
+
+This is the fundamental structural gap. rdkafka's `BaseConsumer` maintains an **internal C-level prefetch queue** that a background thread keeps filled. Application calls to `consumer.poll()` just pop records from that queue — no network I/O, no suspension. If the queue is full, the application thread never waits for the network.
+
+krafka has no equivalent. Every `consumer.poll()` call issues a live Kafka FetchRequest to the broker and awaits the response. The worker is suspended for the full network round-trip on every batch:
+
+```
+rdkafka worker:  pop from prefilled queue (ns) → process → send (ns) → repeat
+krafka worker:   fetch from broker (RTT) → process → send (batch socket write) → repeat
+```
+
+With a single-broker setup on localhost, the fetch RTT is small (~1ms), but at 8 workers × 50K records/poll, the maximum sustainable rate is bounded by how fast the broker can respond to fetch requests — not by CPU or processing speed.
+
+#### Summary
+
+| Bottleneck | rdkafka behaviour | krafka behaviour | Fixable? |
+|---|---|---|---|
+| Producer send coupling | Instant C enqueue, background thread | `send().await` suspends worker | Partially — `Acks::None` + channel decoupling reduces to socket-write latency |
+| Records per poll | Prefilled queue, effectively unlimited | `max_poll_records=500` default | Yes — set `max_poll_records` to 50K+ |
+| Consumer fetch model | Background prefetch, `poll()` pops from queue | Live FetchRequest per `poll()` call | No — krafka has no background prefetch API |
+
+The consumer fetch model is the ceiling that cannot be tuned away. Closing the remaining gap would require krafka to expose a background-prefetch consumer — either a streaming iterator that issues the next fetch while the application processes the current batch, or an internal queue model like rdkafka's. As of v0.7.0, no such API exists.

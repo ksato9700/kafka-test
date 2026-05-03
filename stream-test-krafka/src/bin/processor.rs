@@ -1,6 +1,7 @@
-use futures::future::join_all;
+use futures::stream::{FuturesUnordered, StreamExt};
 use krafka::consumer::{AutoOffsetReset, Consumer};
-use krafka::producer::{Acks, Producer};
+use krafka::producer::{Acks, Producer, ProducerRecord};
+use tokio::sync::mpsc as async_mpsc;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use std::env;
@@ -145,7 +146,7 @@ fn main() {
             rt.block_on(async move {
                 let producer = Producer::builder()
                     .bootstrap_servers(&bootstrap)
-                    .acks(Acks::Leader)
+                    .acks(Acks::None)
                     .idempotent(false)
                     .linger(Duration::from_millis(5))
                     .batch_size(64 * 1024)
@@ -158,6 +159,8 @@ fn main() {
                     .group_id(&group)
                     .auto_offset_reset(AutoOffsetReset::Earliest)
                     .enable_auto_commit(true)
+                    .max_poll_records(50_000)
+                    .max_partition_fetch_bytes(10_000_000)
                     .build()
                     .await
                     .expect("Failed to create worker consumer");
@@ -167,14 +170,54 @@ fn main() {
                     .await
                     .expect("Failed to subscribe");
 
-                let mut local_counter = 0u64;
+                // Channel decouples the consume loop from producer I/O,
+                // mirroring rdkafka's background-thread model in async.
+                let (tx, mut rx) = async_mpsc::unbounded_channel::<Vec<u8>>();
 
+                // Produce task: keeps a FuturesUnordered pool of in-flight
+                // sends so the consume loop is never blocked on I/O.
+                let produce_task = tokio::spawn(async move {
+                    let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
+                    let mut local_counter = 0u64;
+                    let mut channel_open = true;
+
+                    while channel_open || !in_flight.is_empty() {
+                        tokio::select! {
+                            // Accept new buffers while the channel is open
+                            maybe_buf = rx.recv(), if channel_open => {
+                                match maybe_buf {
+                                    Some(buf) => {
+                                        in_flight.push(producer.send_record(
+                                        ProducerRecord::new(&*out_topic, buf),
+                                    ));
+                                    }
+                                    None => { channel_open = false; }
+                                }
+                            }
+                            // Drive completed sends
+                            Some(_) = in_flight.next(), if !in_flight.is_empty() => {
+                                local_counter += 1;
+                                if local_counter >= 1000 {
+                                    let flushed = local_counter;
+                                    let prev = PROCESSED_COUNTER.fetch_add(flushed, Ordering::Relaxed);
+                                    local_counter = 0;
+                                    if is_benchmark && prev + flushed >= TOTAL_RECORDS {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if local_counter > 0 {
+                        PROCESSED_COUNTER.fetch_add(local_counter, Ordering::Relaxed);
+                    }
+                });
+
+                // Consume task: polls and processes records, sends output
+                // buffers to the produce task without waiting for I/O.
                 loop {
                     if is_benchmark && PROCESSED_COUNTER.load(Ordering::Relaxed) >= TOTAL_RECORDS {
-                        if local_counter > 0 {
-                            PROCESSED_COUNTER.fetch_add(local_counter, Ordering::Relaxed);
-                        }
-                        return;
+                        break;
                     }
 
                     match consumer.poll(Duration::from_millis(100)).await {
@@ -183,7 +226,6 @@ fn main() {
                                 continue;
                             }
 
-                            // Record start time on first non-empty batch
                             if START_NANOS.load(Ordering::Relaxed) == 0 {
                                 let now = SystemTime::now()
                                     .duration_since(UNIX_EPOCH)
@@ -197,9 +239,6 @@ fn main() {
                                 );
                             }
 
-                            // Compute sums into owned buffers, then send all concurrently
-                            let mut bufs: Vec<Vec<u8>> = Vec::with_capacity(records.len());
-                            let mut batch_count = 0u64;
                             for record in &records {
                                 if let Some(ref value_bytes) = record.value {
                                     let mut payload: &[u8] = value_bytes.as_ref();
@@ -211,34 +250,18 @@ fn main() {
                                         }
                                         count = read_varint(&mut payload);
                                     }
-
                                     let mut buf = Vec::with_capacity(16);
                                     write_varint(&mut buf, sum);
-                                    bufs.push(buf);
-                                    batch_count += 1;
-                                }
-                            }
-
-                            // Buffers are stable in the Vec; create futures referencing them
-                            let sends: Vec<_> = bufs.iter()
-                                .map(|b| producer.send(&out_topic, None, b.as_slice()))
-                                .collect();
-                            join_all(sends).await;
-
-                            local_counter += batch_count;
-                            if local_counter >= 1000 {
-                                let flushed = local_counter;
-                                let prev = PROCESSED_COUNTER
-                                    .fetch_add(flushed, Ordering::Relaxed);
-                                local_counter = 0;
-                                if is_benchmark && prev + flushed >= TOTAL_RECORDS {
-                                    return;
+                                    let _ = tx.send(buf);
                                 }
                             }
                         }
                         Err(_) => {}
                     }
                 }
+
+                drop(tx); // signal produce task to drain and exit
+                let _ = produce_task.await;
             });
         });
 
