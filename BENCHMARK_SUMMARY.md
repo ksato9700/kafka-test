@@ -6,14 +6,14 @@
 | **C (librdkafka)** | 10.59 seconds | 4,719,502 msg/sec | |
 | **Rust (rdkafka)** | 14.29 seconds | 3,499,934 msg/sec | librdkafka bindings |
 | **Go (confluent-kafka-go)** | 20.43 seconds | 2,447,551 msg/sec | |
-| **Rust (krafka 0.7)** | 1741.55 seconds | 28,710 msg/sec | Pure Rust; `join_all` over each poll batch — concurrent within batch, but poll batches are small so inter-batch serialization remains the bottleneck |
+| **Rust (krafka 0.7, tuned)** | 307.47 seconds | 162,617 msg/sec | Pure Rust; `Acks::Leader`, `linger=5ms`, `batch_size=64KB`, `idempotent=false` |
 
 ## Key Observations
 *   **Java** achieved the highest peak performance, reaching over 6.3 million messages per second.
 *   **C** maintained consistent performance, averaging around 4.5 million messages per second.
 *   **Rust (rdkafka)** peaked at approximately 3.5 million messages per second using librdkafka's fire-and-forget `ThreadedProducer`.
 *   **Go** processed at approximately 2.3 million messages per second.
-*   **Rust (krafka 0.7)** achieved ~29K msg/sec with `join_all` over each poll batch (up from ~15K with sequential `.await`). The fundamental bottleneck is that krafka has no fire-and-forget producer path: every send future must be driven to completion before the result is known. `join_all` concurrently drives sends within a single poll batch, but krafka's poll batches are small, so the next poll can't start until the current batch's sends all ACK. rdkafka's `ThreadedProducer` avoids this entirely by batching and delivering asynchronously in a background thread.
+*   **Rust (krafka 0.7, tuned)** achieved ~163K msg/sec with `Acks::Leader`, `linger=5ms`, `batch_size=64KB`, and `idempotent=false`. Default settings (`Acks::All`, `linger=0`, idempotent enabled) yield only ~15–29K msg/sec. The remaining ~22× gap vs rdkafka likely reflects the difference between krafka's async Tokio send path and rdkafka's dedicated background C thread with fine-tuned batching.
 *   All tests were performed on a backlog of 50,000,000 records.
 
 ## Platform

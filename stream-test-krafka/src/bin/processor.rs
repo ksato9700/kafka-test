@@ -1,6 +1,6 @@
 use futures::future::join_all;
 use krafka::consumer::{AutoOffsetReset, Consumer};
-use krafka::producer::Producer;
+use krafka::producer::{Acks, Producer};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use std::env;
@@ -52,6 +52,10 @@ fn main() {
             let producer = Arc::new(
                 Producer::builder()
                     .bootstrap_servers(&bootstrap)
+                    .acks(Acks::None)
+                    .idempotent(false)
+                    .linger(Duration::from_millis(5))
+                    .batch_size(64 * 1024)
                     .build()
                     .await
                     .expect("Failed to create producer"),
@@ -141,6 +145,10 @@ fn main() {
             rt.block_on(async move {
                 let producer = Producer::builder()
                     .bootstrap_servers(&bootstrap)
+                    .acks(Acks::Leader)
+                    .idempotent(false)
+                    .linger(Duration::from_millis(5))
+                    .batch_size(64 * 1024)
                     .build()
                     .await
                     .expect("Failed to create worker producer");
