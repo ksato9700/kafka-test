@@ -48,14 +48,19 @@ fn main() {
         println!("🚀 Phase 1: Loading {} records (krafka)...", TOTAL_RECORDS);
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
         rt.block_on(async {
-            let producer = Producer::builder()
-                .bootstrap_servers(&bootstrap)
-                .build()
-                .await
-                .expect("Failed to create producer");
+            let producer = Arc::new(
+                Producer::builder()
+                    .bootstrap_servers(&bootstrap)
+                    .build()
+                    .await
+                    .expect("Failed to create producer"),
+            );
 
             let mut rng = SmallRng::from_entropy();
             let mut buf = Vec::with_capacity(64);
+            let mut join_set: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+            // Keep up to 10k sends in flight simultaneously (fire-and-forget style)
+            const WINDOW: usize = 10_000;
 
             for _ in 0..TOTAL_RECORDS {
                 buf.clear();
@@ -65,8 +70,21 @@ fn main() {
                     write_varint(&mut buf, rng.gen_range(0i64..100));
                 }
                 write_varint(&mut buf, 0);
-                let _ = producer.send("integer-list-input-benchmark", None, &buf).await;
+
+                let p = Arc::clone(&producer);
+                let data = buf.clone();
+                join_set.spawn(async move {
+                    let _ = p.send("integer-list-input-benchmark", None, &data).await;
+                });
+
+                // Drain oldest completed send when window is full
+                if join_set.len() >= WINDOW {
+                    join_set.join_next().await;
+                }
             }
+
+            // Wait for all in-flight sends to complete
+            while join_set.join_next().await.is_some() {}
 
             println!("Flushing producer...");
             producer.flush().await.expect("Failed to flush producer");
