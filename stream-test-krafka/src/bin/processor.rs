@@ -1,4 +1,5 @@
 use futures::stream::{FuturesUnordered, StreamExt};
+use krafka::admin::{AdminClient, NewTopic};
 use krafka::consumer::{AutoOffsetReset, Consumer};
 use krafka::producer::{Acks, Producer, ProducerRecord};
 use tokio::sync::mpsc as async_mpsc;
@@ -39,17 +40,69 @@ fn write_varint(buf: &mut Vec<u8>, n: i64) {
 }
 
 fn main() {
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
     let bootstrap = env::var("BOOTSTRAP").unwrap_or_else(|_| "127.0.0.1:9094".to_string());
     let num_workers: usize = env::var("NUM_WORKERS")
         .unwrap_or_else(|_| "8".to_string())
         .parse()
         .expect("NUM_WORKERS must be a number");
 
-    if env::var("BENCHMARK").is_ok() {
+    if env::var("BENCHMARK").is_ok() && env::var("SKIP_LOAD").is_err() {
         println!("🚀 Phase 1: Loading {} records (krafka)...", TOTAL_RECORDS);
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
         rt.block_on(async {
+            let admin = AdminClient::builder()
+                .bootstrap_servers(&bootstrap)
+                .build()
+                .await
+                .expect("Failed to create admin client");
+            // Delete then recreate to ensure correct partition count.
+            let _ = admin.delete_topics(
+                vec![
+                    "integer-list-input-benchmark".to_string(),
+                    "integer-sum-output-benchmark".to_string(),
+                ],
+                Duration::from_secs(10),
+            ).await;
+            // Brief pause for deletion to propagate before recreating.
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            admin.create_topics(
+                vec![
+                    NewTopic::new("integer-list-input-benchmark", num_workers as i32, 1)
+                        .expect("invalid topic spec"),
+                    NewTopic::new("integer-sum-output-benchmark", num_workers as i32, 1)
+                        .expect("invalid topic spec"),
+                ],
+                Duration::from_secs(10),
+            ).await.expect("Failed to create benchmark topics");
+
+            // Wait until all partitions have elected leaders before proceeding.
+            // Auto-created topics briefly return LeaderNotAvailable; polling
+            // describe_topics until all partitions report a valid leader_id ensures
+            // the consumer metadata cache sees a complete partition map on first refresh.
+            println!("Waiting for partition leaders...");
+            loop {
+                let Ok(descriptions) = admin.describe_topics(&[
+                    "integer-list-input-benchmark".to_string(),
+                    "integer-sum-output-benchmark".to_string(),
+                ]).await else {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    continue;
+                };
+                let all_ready = descriptions.iter().all(|td| {
+                    td.partitions.len() == num_workers
+                        && td.partitions.iter().all(|p| p.leader >= 0)
+                });
+                if all_ready {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            println!("All partitions ready.");
+            admin.close().await;
+
             let producer = Arc::new(
                 Producer::builder()
                     .bootstrap_servers(&bootstrap)
@@ -106,16 +159,6 @@ fn main() {
         ("integer-list-input", "integer-sum-output", false)
     };
 
-    let group_prefix = if is_benchmark { "benchmark-krafka" } else { "stream-krafka" };
-    let group_id = format!(
-        "{}-{}",
-        group_prefix,
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    );
-
     let reporter_stop = Arc::new(AtomicU64::new(0));
     let reporter_stop_clone = Arc::clone(&reporter_stop);
 
@@ -135,9 +178,8 @@ fn main() {
 
     let mut handles = Vec::with_capacity(num_workers);
 
-    for _ in 0..num_workers {
+    for worker_id in 0..num_workers {
         let bootstrap = bootstrap.clone();
-        let group = group_id.clone();
         let in_topic = p2_input.to_string();
         let out_topic = p2_output.to_string();
 
@@ -156,19 +198,25 @@ fn main() {
 
                 let consumer = Consumer::builder()
                     .bootstrap_servers(&bootstrap)
-                    .group_id(&group)
                     .auto_offset_reset(AutoOffsetReset::Earliest)
-                    .enable_auto_commit(true)
                     .max_poll_records(50_000)
                     .max_partition_fetch_bytes(10_000_000)
                     .build()
                     .await
                     .expect("Failed to create worker consumer");
 
+                // Each worker owns exactly one partition — no group coordinator,
+                // no rebalances, no heartbeat timeouts.
+                // assign() internally applies auto_offset_reset (Earliest), so
+                // no explicit seek is needed.
                 consumer
-                    .subscribe(&[in_topic.as_str()])
+                    .assign(&in_topic, vec![worker_id as i32])
                     .await
-                    .expect("Failed to subscribe");
+                    .expect("Failed to assign partition");
+                consumer
+                    .seek(&in_topic, worker_id as i32, 0)
+                    .await
+                    .expect("Failed to seek to offset 0");
 
                 // Channel decouples the consume loop from producer I/O,
                 // mirroring rdkafka's background-thread model in async.
@@ -198,12 +246,8 @@ fn main() {
                             Some(_) = in_flight.next(), if !in_flight.is_empty() => {
                                 local_counter += 1;
                                 if local_counter >= 1000 {
-                                    let flushed = local_counter;
-                                    let prev = PROCESSED_COUNTER.fetch_add(flushed, Ordering::Relaxed);
+                                    PROCESSED_COUNTER.fetch_add(local_counter, Ordering::Relaxed);
                                     local_counter = 0;
-                                    if is_benchmark && prev + flushed >= TOTAL_RECORDS {
-                                        return;
-                                    }
                                 }
                             }
                         }
@@ -215,48 +259,59 @@ fn main() {
 
                 // Consume task: polls and processes records, sends output
                 // buffers to the produce task without waiting for I/O.
+                let mut consecutive_empty = 0u32;
                 loop {
-                    if is_benchmark && PROCESSED_COUNTER.load(Ordering::Relaxed) >= TOTAL_RECORDS {
+                    if PROCESSED_COUNTER.load(Ordering::Relaxed) >= TOTAL_RECORDS {
                         break;
                     }
 
-                    match consumer.poll(Duration::from_millis(100)).await {
-                        Ok(records) => {
-                            if records.is_empty() {
-                                continue;
-                            }
+                    // poll() sends one fetch request with max_wait_ms=50ms.
+                    // Unlike batch_recv, the outer deadline doesn't constrain
+                    // how many records we can accumulate across calls.
+                    let records = match consumer.poll(Duration::from_millis(50)).await {
+                        Ok(r) => r,
+                        Err(_) => continue,
+                    };
 
-                            if START_NANOS.load(Ordering::Relaxed) == 0 {
-                                let now = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_nanos() as u64;
-                                let _ = START_NANOS.compare_exchange(
-                                    0,
-                                    now,
-                                    Ordering::SeqCst,
-                                    Ordering::Relaxed,
-                                );
-                            }
-
-                            for record in &records {
-                                if let Some(ref value_bytes) = record.value {
-                                    let mut payload: &[u8] = value_bytes.as_ref();
-                                    let mut sum: i64 = 0;
-                                    let mut count = read_varint(&mut payload);
-                                    while count != 0 {
-                                        for _ in 0..count {
-                                            sum += read_varint(&mut payload);
-                                        }
-                                        count = read_varint(&mut payload);
-                                    }
-                                    let mut buf = Vec::with_capacity(16);
-                                    write_varint(&mut buf, sum);
-                                    let _ = tx.send(buf);
-                                }
-                            }
+                    if records.is_empty() {
+                        consecutive_empty += 1;
+                        // Break after 3 consecutive empty fetches: partition is drained.
+                        if consecutive_empty >= 3 {
+                            break;
                         }
-                        Err(_) => {}
+                        continue;
+                    }
+
+                    consecutive_empty = 0;
+
+                    if START_NANOS.load(Ordering::Relaxed) == 0 {
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos() as u64;
+                        let _ = START_NANOS.compare_exchange(
+                            0,
+                            now,
+                            Ordering::SeqCst,
+                            Ordering::Relaxed,
+                        );
+                    }
+
+                    for record in &records {
+                        if let Some(ref value_bytes) = record.value {
+                            let mut payload: &[u8] = value_bytes.as_ref();
+                            let mut sum: i64 = 0;
+                            let mut count = read_varint(&mut payload);
+                            while count != 0 {
+                                for _ in 0..count {
+                                    sum += read_varint(&mut payload);
+                                }
+                                count = read_varint(&mut payload);
+                            }
+                            let mut buf = Vec::with_capacity(16);
+                            write_varint(&mut buf, sum);
+                            let _ = tx.send(buf);
+                        }
                     }
                 }
 

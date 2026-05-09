@@ -8,6 +8,10 @@ name = "processor"
 path = "src/bin/processor.rs"
 
 [[bin]]
+name = "assign_test"
+path = "src/bin/assign_test.rs"
+
+[[bin]]
 name = "producer"
 path = "src/bin/producer.rs"
 
@@ -15,13 +19,18 @@ path = "src/bin/producer.rs"
 name = "consumer"
 path = "src/bin/consumer.rs"
 
+[[bin]]
+name = "read_test"
+path = "src/bin/read_test.rs"
+
 [dependencies]
-krafka = "0.7"
-tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+krafka = "0.8"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 rand = { version = "0.8", features = ["small_rng"] }
 log = "0.4"
 env_logger = "0.11"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 opt-level = 3

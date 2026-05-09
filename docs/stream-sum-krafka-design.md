@@ -2,7 +2,7 @@
 
 ## 1. Objective
 
-Implement `streaming-performance-spec.md` in Rust using the **krafka** crate (v0.7) —
+Implement `streaming-performance-spec.md` in Rust using the **krafka** crate (v0.8) —
 a pure-Rust, async-native Kafka client — and benchmark it against `stream-test-rust`
 (rdkafka / librdkafka). The goal is to validate krafka's throughput ceiling and document
 the architectural differences that explain any performance gap.
@@ -10,7 +10,7 @@ the architectural differences that explain any performance gap.
 ## 2. Architecture & Technology Stack
 
 - **Language**: Rust (Edition 2021, MSRV 1.88)
-- **Kafka Library**: `krafka = "0.7"` (published crate)
+- **Kafka Library**: `krafka = "0.8"` (published crate)
 - **Async Runtime**: `tokio` (multi-thread, one runtime per worker OS thread)
 - **Serialization**: Manual Zig-Zag (LEB128) — no Avro library overhead
 - **Concurrency Model**: Each worker runs on a dedicated OS thread with its own
@@ -22,7 +22,7 @@ the architectural differences that explain any performance gap.
 
 ```
 stream-test-krafka/
-├── Cargo.toml          # krafka 0.7, tokio, futures, rand, env_logger
+├── Cargo.toml          # krafka 0.8, tokio, futures, rand, tracing-subscriber
 ├── Makefile            # run-benchmark, docker-build, docker-run-benchmark
 ├── Dockerfile          # Multi-stage: rust:1.88-alpine builder → alpine runtime
 ├── .dockerignore / .gitignore
@@ -44,13 +44,25 @@ Phase 1 only runs when the `BENCHMARK` environment variable is set.
 ### Phase 2 — Process
 
 Each of `NUM_WORKERS` workers runs on its own OS thread + Tokio runtime and owns:
-- One `Consumer` (`max_poll_records=50_000`, `max_partition_fetch_bytes=10MB`)
+- One `Consumer` (no group ID; `assign()` + explicit `seek(partition, 0)`, `max_poll_records=50_000`, `max_partition_fetch_bytes=10MB`)
 - One `Producer` (`Acks::None`, `linger=5ms`, `batch_size=64KiB`)
 - An `mpsc::unbounded_channel` decoupling the consume loop from producer I/O
 
-The consume loop polls records, decodes Zig-Zag, encodes the sum, and puts the result
-on the channel. A separate `produce_task` drains the channel via `FuturesUnordered`
-and `tokio::select!` so sends never block the consume loop.
+Each worker is assigned exactly one partition via `consumer.assign()` — bypassing the
+group coordinator entirely (no rebalances, no heartbeats, no `CoordinatorNotAvailable`
+errors under concurrent startup). `seek(partition, 0)` is called explicitly after assign
+to guarantee the fetch offset is resolved even if the `ListOffsets` RPC during
+`apply_auto_offset_reset` is slow or races with metadata propagation.
+
+The consume loop calls `consumer.poll(50ms)` in a tight loop. Each call issues one
+`FetchRequest` to the broker with `max_wait_ms=50`. Records are decoded (Zig-Zag),
+summed, and put on the channel without awaiting the producer. A separate `produce_task`
+drains the channel via `FuturesUnordered` and `tokio::select!` so the consume loop is
+never blocked on I/O.
+
+Termination: after 3 consecutive empty polls (partition drained), the consume loop
+breaks. `tx` is dropped, signalling `produce_task` to drain its `FuturesUnordered` queue
+and flush the remaining `local_counter` into `PROCESSED_COUNTER`.
 
 In non-benchmark mode (no `BENCHMARK` env var), Phase 2 runs continuously against the
 `integer-list-input` / `integer-sum-output` topics.
@@ -62,6 +74,7 @@ In non-benchmark mode (no `BENCHMARK` env var), Phase 2 runs continuously agains
 | `BOOTSTRAP` | `127.0.0.1:9094` | Broker address |
 | `NUM_WORKERS` | `8` | Parallel worker threads |
 | `BENCHMARK` | _(unset)_ | Set to any value to enable benchmark mode (Phase 1 + Phase 2 with fixed record count) |
+| `SKIP_LOAD` | _(unset)_ | Set alongside `BENCHMARK` to skip Phase 1 (reuse existing topic data) |
 
 Topic names are hardcoded:
 - Benchmark mode: `integer-list-input-benchmark` → `integer-sum-output-benchmark`
@@ -69,10 +82,24 @@ Topic names are hardcoded:
 
 ## 4. Performance Findings
 
-### What was tried and why it was slow
+### Measured result (krafka v0.8)
 
-During implementation, several approaches were explored before arriving at the current
-design. The table below summarises the progression:
+| Metric | Value |
+|---|---|
+| Total records | 50,000,000 |
+| Processing time | ~73 s |
+| Throughput | ~682,000 msg/sec |
+| Hardware | Apple M4, macOS, Kafka 4.2.0 (Docker / Lima) |
+| Workers | 8 |
+
+This is a **3.7× improvement over krafka v0.7** (~185K msg/sec). The v0.8 improvement
+comes from a more efficient internal fetch pipeline and better incremental fetch session
+(KIP-227) handling, which reduces per-poll overhead when `max_poll_records` is large.
+
+### What was tried and why it was slow (v0.7 era)
+
+During the v0.7 implementation, several approaches were explored before arriving at the
+current design:
 
 | Attempt | Problem | Root cause |
 |---|---|---|
@@ -80,6 +107,30 @@ design. The table below summarises the progression:
 | `FuturesUnordered` of `send_record` | Still slow — window_drain_ms ≈ 72% of wall time | `FuturesUnordered` only makes progress when explicitly polled; futures stall between loop iterations |
 | `tokio::spawn` per send + `Semaphore` | Phase 1 ~680k msg/sec, still ~5× slower than rdkafka | Task spawn overhead × 50M; rdkafka's C ring buffer costs ~50ns vs ~400ns per Tokio task |
 | `Acks::None` + `JoinSet` window + channel decoupling (current) | Best result; still ~19× slower than rdkafka in Phase 2 | Consumer `poll()` structural bottleneck (see below) |
+
+### API surprises in v0.8 (upgrade from v0.7)
+
+Upgrading from v0.7 to v0.8 required several non-obvious fixes:
+
+- **`batch_recv` takes a second `Duration` argument.** v0.7 used a single `max_records`
+  argument; v0.8 separates the accumulation timeout: `batch_recv(max_records, timeout)`.
+- **`BatchRecvOutcome` is `#[non_exhaustive]`.** Match arms must include a `Ok(_) => {}`
+  wildcard even when all four named variants are handled.
+- **`create_topics` / `delete_topics` require a `Duration` timeout argument** as the
+  second parameter.
+- **`describe_topics` takes `&[String]`, not `&[&str]`.**
+- **`fetch_watermarks` takes 2 arguments** (topic + partition), not 3.
+- **krafka uses `tracing`, not `log`.** `RUST_LOG=krafka=debug` with `env_logger` produces
+  no output. Replace with `tracing_subscriber`.
+- **`batch_recv` timeout doubles as `max_wait_ms`.** The same duration is passed both as
+  the outer accumulation deadline and as the broker's `max_wait_ms`. With `100ms`, the
+  broker's round-trip through Docker/Lima consumed the full deadline, returning `TimedOut`
+  on every call despite records being available. The fix is to use `consumer.poll(50ms)`
+  directly so the broker timeout and the application loop timeout are decoupled.
+- **`assign()` + `auto_offset_reset` race.** `assign()` calls `apply_auto_offset_reset()`
+  which issues a `ListOffsets` RPC. If this RPC is slow or races with metadata, the
+  partition gets no tracked offset and is silently skipped on every subsequent fetch.
+  Fix: call `consumer.seek(topic, partition, 0)` explicitly after `assign()`.
 
 ### The producer bottleneck: `send().await` is always ACK-gated
 
@@ -89,46 +140,91 @@ acknowledgement (or TCP write with `Acks::None`). There is no synchronous enqueu
 The async accumulator channel adds latency that cannot be eliminated at the application
 level.
 
-### The consumer bottleneck: `poll()` is synchronous per call
+### The consumer bottleneck: sequential fetch → process cycle
 
-Every call to `consumer.poll()` issues a fresh `FetchRequest` to the broker and awaits
-the response before returning. librdkafka continuously pre-fetches into a background C
-thread buffer so `poll()` reads from memory and returns in microseconds. krafka v0.7 has
-no background prefetch loop, so each poll call pays one full network RTT regardless of
-`max_poll_records`. This is confirmed by reading `consumer/mod.rs`: `batch_fetch_from_broker`
-is called synchronously inside every `poll()`.
+Every call to `consumer.poll()` issues a `FetchRequest` to the broker and awaits the
+response before returning. librdkafka continuously pre-fetches into a background C thread
+buffer so application `poll()` calls read from memory and return in microseconds.
+krafka v0.8 has no background prefetch loop; each `poll()` call pays one full network
+round-trip (RTT) regardless of `max_poll_records`.
 
-At 8 workers on a local broker the measured throughput gap is approximately **19×**:
-rdkafka ~3.5M msg/sec vs. krafka ~185k msg/sec (`Acks::None`).
+With 50K records per fetch, each cycle is approximately:
+- Broker fetch RTT (~5–15ms through Docker/Lima)
+- Record processing (~100ms for 50K records at ~2μs/record)
+- Channel send (sub-millisecond)
+
+This gives a per-worker ceiling of roughly 400K–600K msg/sec. With 8 workers summing to
+~682K total, most of that ceiling is network-and-processing rather than CPU.
+
+The **structural gap** versus rdkafka is that fetch and process are sequential in krafka
+but pipelined (overlapped) in rdkafka:
+
+```
+rdkafka:  [prefetch running continuously in background]
+app:               [pop+process] [pop+process] [pop+process] ...
+
+krafka:   [fetch RTT] [process] [fetch RTT] [process] ...
+```
+
+Closing this gap would require a background-prefetch consumer in krafka — either a
+streaming iterator that issues the next fetch while the application processes the current
+batch, or an internal queue model. No such API exists in v0.8.
+
+### Additional structural gap: 8 separate FetchRequests vs 1
+
+Our design assigns each worker its own `Consumer` and its own partition, so 8 independent
+`FetchRequest`s are sent to the broker per poll cycle — one per connection. rdkafka's
+group consumer background thread sends a **single FetchRequest** containing all assigned
+partitions, letting the broker handle one request instead of eight. At high message rates
+this reduces broker scheduling overhead meaningfully.
 
 ### Key tuning lessons
 
-1. **`Acks::None` is required for competitive producer throughput.** `Acks::Leader` or
+1. **Use `consumer.poll(short_timeout)` rather than `batch_recv(n, short_timeout)`.** With
+   `batch_recv`, the same duration caps both the broker `max_wait_ms` and the outer
+   accumulation deadline. A short timeout causes every call to return `TimedOut` if the
+   round-trip slightly exceeds it; `poll()` decouples these concerns.
+
+2. **Call `seek(partition, 0)` explicitly after `assign()`.** Relying on
+   `auto_offset_reset=Earliest` is fragile — the internal `ListOffsets` RPC can be slow or
+   fail transiently, leaving the partition with no tracked offset and silently skipping all
+   fetches.
+
+3. **`Acks::None` is required for competitive producer throughput.** `Acks::Leader` or
    `Acks::All` adds a full broker RTT to every batch flush even with `FuturesUnordered`.
 
-2. **Never `await` sends inside the consume loop.** Use a channel + dedicated produce
+4. **Never `await` sends inside the consume loop.** Use a channel + dedicated produce
    task so the consume loop is never blocked on I/O.
 
-3. **Per-worker OS thread + own `Runtime`.** Sharing one multi-thread Tokio pool across
+5. **Per-worker OS thread + own `Runtime`.** Sharing one multi-thread Tokio pool across
    all workers causes work-stealing scheduler contention that measurably reduces throughput.
 
-4. **`max_poll_records=50_000` and `max_partition_fetch_bytes=10MB`** are needed to
+6. **`max_poll_records=50_000` and `max_partition_fetch_bytes=10MB`** are needed to
    amortise the per-poll RTT over as many records as possible.
 
-5. **`FuturesUnordered` alone does not make sends concurrent** unless it is polled
+7. **`FuturesUnordered` alone does not make sends concurrent** unless it is polled
    continuously (e.g., via `tokio::select!`). A naïve `while let Some(r) = futs.next().await`
    drain loop serialises rather than pipelines.
 
+8. **Drain termination requires counting consecutive empty polls.** After a partition is
+   exhausted, `poll()` returns empty indefinitely. The consume loop must break on N
+   consecutive empty results and drop `tx` so the produce task can flush its
+   `local_counter` remainder and exit cleanly.
+
 ## 5. Comparison vs. `stream-test-rust` (rdkafka)
 
-| Aspect | stream-test-krafka | stream-test-rust (rdkafka) |
+| Aspect | stream-test-krafka (v0.8) | stream-test-rust (rdkafka) |
 |---|---|---|
 | C dependency | None | Yes (librdkafka, cmake) |
 | Cross-compilation | Pure Rust (`cargo build --target …`) | Requires C cross-compiler |
 | Producer send model | Async, ACK-gated | Sync enqueue into C ring buffer |
 | Consumer fetch model | Sync per-poll network fetch | Background C prefetch thread |
-| Observed throughput (8 workers, local broker) | ~185k msg/sec (`Acks::None`) | ~3.5M msg/sec |
-| Throughput gap closable by app tuning? | No — architectural limit in krafka v0.7 | N/A |
+| Observed throughput (8 workers, local broker) | ~682K msg/sec | ~3.5M msg/sec |
+| Throughput gap | ~5× | N/A |
+| Gap closable by app tuning? | Partially — pipelining fetch+process would help | N/A |
+
+The remaining ~5× gap (down from ~19× with v0.7) is primarily the sequential fetch+process
+cycle vs rdkafka's continuous background prefetch, plus the 8-separate-requests overhead.
 
 ## 6. Implementation Checklist
 
@@ -138,6 +234,9 @@ rdkafka ~3.5M msg/sec vs. krafka ~185k msg/sec (`Acks::None`).
 - [x] Inline Zig-Zag encode/decode (`read_varint` / `write_varint`)
 - [x] Progress reporter (1-second interval)
 - [x] Final result log: `BENCHMARK RESULT (KRAFKA)`, total records, seconds, msg/sec
-- [x] `Cargo.toml` — krafka 0.7 (published), tokio, futures, rand, env_logger
+- [x] `Cargo.toml` — krafka 0.8 (published), tokio, futures, rand, tracing-subscriber
 - [x] `Makefile` — `run-benchmark`, `docker-build`, `docker-run-benchmark`
 - [x] `Dockerfile` — multi-stage Alpine build
+- [x] `assign()` + explicit `seek(0)` per worker partition
+- [x] `poll(50ms)` loop with consecutive-empty-poll termination
+- [x] `SKIP_LOAD` env var to skip Phase 1 reload
