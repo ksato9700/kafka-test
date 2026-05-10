@@ -1,0 +1,24 @@
+[package]
+name = "stream-test-krafka2"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "processor"
+path = "src/bin/processor.rs"
+
+[[bin]]
+name = "send_latency"
+path = "src/bin/send_latency.rs"
+
+[dependencies]
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
+krafka = "0.8"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync"] }
+rand = { version = "0.8", features = ["small_rng"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
