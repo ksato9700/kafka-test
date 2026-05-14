@@ -76,6 +76,7 @@ fn main() {
                         .expect("invalid topic spec"),
                 ],
                 Duration::from_secs(10),
+                false,
             ).await.expect("Failed to create benchmark topics");
 
             // Wait until all partitions have elected leaders before proceeding.
@@ -93,7 +94,7 @@ fn main() {
                 };
                 let all_ready = descriptions.iter().all(|td| {
                     td.partitions.len() == num_workers
-                        && td.partitions.iter().all(|p| p.leader >= 0)
+                        && td.partitions.iter().all(|p| p.1.leader >= 0)
                 });
                 if all_ready {
                     break;

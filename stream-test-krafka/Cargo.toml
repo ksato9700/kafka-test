@@ -24,7 +24,7 @@ name = "read_test"
 path = "src/bin/read_test.rs"
 
 [dependencies]
-krafka = "0.8"
+krafka = "0.9"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 rand = { version = "0.8", features = ["small_rng"] }
