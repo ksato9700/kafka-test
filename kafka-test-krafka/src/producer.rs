@@ -30,8 +30,14 @@ async fn main() {
     let schema = load_schema();
     tracing::info!("Loaded Avro schema");
 
-    let bootstrap_servers =
+    let mut bootstrap_servers =
         env::var("KAFKA_BOOTSTRAP_SERVERS").unwrap_or_else(|_| "127.0.0.1:9094".to_string());
+
+    // Force IPv4 for dual-stack hosts (e.g., localhost -> 127.0.0.1) to avoid resolution lag on macOS
+    if bootstrap_servers.contains("localhost") {
+        bootstrap_servers = bootstrap_servers.replace("localhost", "127.0.0.1");
+    }
+
     let topic = env::var("TOPIC_NAME").unwrap_or_else(|_| "my-topic-1".to_string());
 
     let producer = Producer::builder()
@@ -70,11 +76,20 @@ async fn main() {
             _ = time::sleep(Duration::from_secs(2)) => {}
             _ = tokio::signal::ctrl_c() => {
                 tracing::info!("🛑 Shutting down producer...");
-                if let Err(e) = producer.flush().await {
-                    tracing::error!("Failed to flush producer on shutdown: {:?}", e);
-                }
                 break;
             }
         }
     }
+
+    // Flush pending messages, print telemetry and cleanly shut down
+    if let Err(e) = producer.flush().await {
+        tracing::error!("Failed to flush producer on shutdown: {:?}", e);
+    }
+    let snap = producer.metrics().await;
+    tracing::info!(
+        "📊 Telemetry: records_sent={} connections={}",
+        snap.records_sent,
+        snap.connections
+    );
+    producer.close().await;
 }

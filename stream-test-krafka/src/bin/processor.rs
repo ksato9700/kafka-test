@@ -2,13 +2,13 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use krafka::admin::{AdminClient, NewTopic};
 use krafka::consumer::{AutoOffsetReset, Consumer};
 use krafka::producer::{Acks, Producer, ProducerRecord};
-use tokio::sync::mpsc as async_mpsc;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::mpsc as async_mpsc;
 
 static PROCESSED_COUNTER: AtomicU64 = AtomicU64::new(0);
 static START_NANOS: AtomicU64 = AtomicU64::new(0);
@@ -22,9 +22,13 @@ fn read_varint(reader: &mut &[u8]) -> i64 {
         let b = reader[0];
         *reader = &(*reader)[1..];
         val |= ((b & 0x7F) as u64) << shift;
-        if b & 0x80 == 0 { break; }
+        if b & 0x80 == 0 {
+            break;
+        }
         shift += 7;
-        if shift >= 64 { break; }
+        if shift >= 64 {
+            break;
+        }
     }
     ((val >> 1) as i64) ^ -((val & 1) as i64)
 }
@@ -59,25 +63,30 @@ fn main() {
                 .await
                 .expect("Failed to create admin client");
             // Delete then recreate to ensure correct partition count.
-            let _ = admin.delete_topics(
-                vec![
-                    "integer-list-input-benchmark".to_string(),
-                    "integer-sum-output-benchmark".to_string(),
-                ],
-                Duration::from_secs(10),
-            ).await;
+            let _ = admin
+                .delete_topics(
+                    vec![
+                        "integer-list-input-benchmark".to_string(),
+                        "integer-sum-output-benchmark".to_string(),
+                    ],
+                    Duration::from_secs(10),
+                )
+                .await;
             // Brief pause for deletion to propagate before recreating.
             tokio::time::sleep(Duration::from_secs(1)).await;
-            admin.create_topics(
-                vec![
-                    NewTopic::new("integer-list-input-benchmark", num_workers as i32, 1)
-                        .expect("invalid topic spec"),
-                    NewTopic::new("integer-sum-output-benchmark", num_workers as i32, 1)
-                        .expect("invalid topic spec"),
-                ],
-                Duration::from_secs(10),
-                false,
-            ).await.expect("Failed to create benchmark topics");
+            admin
+                .create_topics(
+                    vec![
+                        NewTopic::new("integer-list-input-benchmark", num_workers as i32, 1)
+                            .expect("invalid topic spec"),
+                        NewTopic::new("integer-sum-output-benchmark", num_workers as i32, 1)
+                            .expect("invalid topic spec"),
+                    ],
+                    Duration::from_secs(10),
+                    false,
+                )
+                .await
+                .expect("Failed to create benchmark topics");
 
             // Wait until all partitions have elected leaders before proceeding.
             // Auto-created topics briefly return LeaderNotAvailable; polling
@@ -85,10 +94,13 @@ fn main() {
             // the consumer metadata cache sees a complete partition map on first refresh.
             println!("Waiting for partition leaders...");
             loop {
-                let Ok(descriptions) = admin.describe_topics(&[
-                    "integer-list-input-benchmark".to_string(),
-                    "integer-sum-output-benchmark".to_string(),
-                ]).await else {
+                let Ok(descriptions) = admin
+                    .describe_topics(&[
+                        "integer-list-input-benchmark".to_string(),
+                        "integer-sum-output-benchmark".to_string(),
+                    ])
+                    .await
+                else {
                     tokio::time::sleep(Duration::from_millis(200)).await;
                     continue;
                 };
@@ -155,7 +167,11 @@ fn main() {
     println!("🚀 Phase 2: Processing with {} workers...", num_workers);
 
     let (p2_input, p2_output, is_benchmark) = if env::var("BENCHMARK").is_ok() {
-        ("integer-list-input-benchmark", "integer-sum-output-benchmark", true)
+        (
+            "integer-list-input-benchmark",
+            "integer-sum-output-benchmark",
+            true,
+        )
     } else {
         ("integer-list-input", "integer-sum-output", false)
     };
@@ -169,7 +185,12 @@ fn main() {
             let c = PROCESSED_COUNTER.load(Ordering::Relaxed);
             if c > 0 {
                 if is_benchmark {
-                    eprintln!("Progress: {}% ({} / {})", c * 100 / TOTAL_RECORDS, c, TOTAL_RECORDS);
+                    eprintln!(
+                        "Progress: {}% ({} / {})",
+                        c * 100 / TOTAL_RECORDS,
+                        c,
+                        TOTAL_RECORDS
+                    );
                 } else {
                     eprintln!("Progress: {} records processed", c);
                 }
@@ -400,7 +421,9 @@ mod tests {
         let count = read_varint(&mut slice);
         assert_eq!(count, 3);
         let mut sum = 0i64;
-        for _ in 0..count { sum += read_varint(&mut slice); }
+        for _ in 0..count {
+            sum += read_varint(&mut slice);
+        }
         let terminator = read_varint(&mut slice);
         assert_eq!(sum, 60);
         assert_eq!(terminator, 0);

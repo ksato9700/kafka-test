@@ -10,9 +10,13 @@ fn read_varint(reader: &mut &[u8]) -> i64 {
         let b = reader[0];
         *reader = &(*reader)[1..];
         val |= ((b & 0x7F) as u64) << shift;
-        if b & 0x80 == 0 { break; }
+        if b & 0x80 == 0 {
+            break;
+        }
         shift += 7;
-        if shift >= 64 { break; }
+        if shift >= 64 {
+            break;
+        }
     }
     ((val >> 1) as i64) ^ -((val & 1) as i64)
 }

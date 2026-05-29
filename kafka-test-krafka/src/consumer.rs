@@ -36,8 +36,14 @@ async fn main() {
     let schema = load_schema();
     tracing::info!("Loaded Avro schema");
 
-    let bootstrap_servers =
+    let mut bootstrap_servers =
         env::var("KAFKA_BOOTSTRAP_SERVERS").unwrap_or_else(|_| "127.0.0.1:9094".to_string());
+
+    // Force IPv4 for dual-stack hosts (e.g., localhost -> 127.0.0.1) to avoid resolution lag on macOS
+    if bootstrap_servers.contains("localhost") {
+        bootstrap_servers = bootstrap_servers.replace("localhost", "127.0.0.1");
+    }
+
     let topic = env::var("TOPIC_NAME").unwrap_or_else(|_| "my-topic-1".to_string());
     let group_id = env::var("CONSUMER_GROUP_ID").unwrap_or_else(|_| "my-group-1".to_string());
     let auto_offset_reset_str =
@@ -134,5 +140,11 @@ async fn main() {
                 break;
             }
         }
+    }
+
+    let metrics = consumer.metrics();
+    tracing::info!("📊 Telemetry: {:?}", metrics);
+    if let Err(e) = consumer.close().await {
+        tracing::error!("Failed to close consumer cleanly: {:?}", e);
     }
 }
