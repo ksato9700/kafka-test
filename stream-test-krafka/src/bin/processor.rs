@@ -53,6 +53,16 @@ fn main() {
         .parse()
         .expect("NUM_WORKERS must be a number");
 
+    let is_durable = env::var("DURABLE").is_ok();
+    if is_durable {
+        println!("🔒 Durable mode enabled (idempotency=true, acks=all)");
+    } else {
+        println!("⚡ Best-effort mode enabled (idempotency=false, acks=none)");
+    }
+
+    let acks = if is_durable { Acks::All } else { Acks::None };
+    let idempotent = is_durable;
+
     if env::var("BENCHMARK").is_ok() && env::var("SKIP_LOAD").is_err() {
         println!("🚀 Phase 1: Loading {} records (krafka)...", TOTAL_RECORDS);
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -105,8 +115,8 @@ fn main() {
                     continue;
                 };
                 let all_ready = descriptions.iter().all(|td| {
-                    td.partitions.len() == num_workers
-                        && td.partitions.iter().all(|p| p.1.leader >= 0)
+                    td.1.partitions.len() == num_workers
+                        && td.1.partitions.iter().all(|p| p.1.leader >= 0)
                 });
                 if all_ready {
                     break;
@@ -119,8 +129,8 @@ fn main() {
             let producer = Arc::new(
                 Producer::builder()
                     .bootstrap_servers(&bootstrap)
-                    .acks(Acks::None)
-                    .idempotent(false)
+                    .acks(acks)
+                    .idempotent(idempotent)
                     .linger(Duration::from_millis(5))
                     .batch_size(64 * 1024)
                     .build()
@@ -130,7 +140,12 @@ fn main() {
 
             let mut rng = SmallRng::from_entropy();
             let mut buf = Vec::with_capacity(64);
-            let mut join_set: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+
+            // NOTE: We must use a single-task FuturesUnordered queue rather than tokio::task::JoinSet
+            // to guarantee that the futures are pushed and polled in order. This is critical for
+            // idempotent producers (idempotency=true), where sequence numbers are allocated
+            // atomically on the first poll. Out-of-order polling causes broker sequence errors.
+            let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
             // Keep up to 10k sends in flight simultaneously (fire-and-forget style)
             const WINDOW: usize = 10_000;
 
@@ -145,18 +160,18 @@ fn main() {
 
                 let p = Arc::clone(&producer);
                 let data = buf.clone();
-                join_set.spawn(async move {
+                in_flight.push(async move {
                     let _ = p.send("integer-list-input-benchmark", None, &data).await;
                 });
 
                 // Drain oldest completed send when window is full
-                if join_set.len() >= WINDOW {
-                    join_set.join_next().await;
+                if in_flight.len() >= WINDOW {
+                    in_flight.next().await;
                 }
             }
 
             // Wait for all in-flight sends to complete
-            while join_set.join_next().await.is_some() {}
+            while in_flight.next().await.is_some() {}
 
             println!("Flushing producer...");
             producer.flush().await.expect("Failed to flush producer");
@@ -210,8 +225,8 @@ fn main() {
             rt.block_on(async move {
                 let producer = Producer::builder()
                     .bootstrap_servers(&bootstrap)
-                    .acks(Acks::None)
-                    .idempotent(false)
+                    .acks(acks)
+                    .idempotent(idempotent)
                     .linger(Duration::from_millis(5))
                     .batch_size(64 * 1024)
                     .build()
@@ -222,7 +237,7 @@ fn main() {
                     .bootstrap_servers(&bootstrap)
                     .auto_offset_reset(AutoOffsetReset::Earliest)
                     .max_poll_records(50_000)
-                    .max_partition_fetch_bytes(10_000_000)
+                    .max_partition_fetch_bytes(4_000_000)
                     .build()
                     .await
                     .expect("Failed to create worker consumer");
@@ -242,7 +257,11 @@ fn main() {
 
                 // Channel decouples the consume loop from producer I/O,
                 // mirroring rdkafka's background-thread model in async.
-                let (tx, mut rx) = async_mpsc::unbounded_channel::<Vec<u8>>();
+                // Bounded (not unbounded): this is what applies backpressure
+                // to the consume loop below when production falls behind, so
+                // the queue can't grow without bound and OOM the process.
+                const WORKER_WINDOW: usize = 10_000;
+                let (tx, mut rx) = async_mpsc::channel::<Vec<u8>>(WORKER_WINDOW);
 
                 // Produce task: keeps a FuturesUnordered pool of in-flight
                 // sends so the consume loop is never blocked on I/O.
@@ -253,8 +272,10 @@ fn main() {
 
                     while channel_open || !in_flight.is_empty() {
                         tokio::select! {
-                            // Accept new buffers while the channel is open
-                            maybe_buf = rx.recv(), if channel_open => {
+                            // Accept new buffers while the channel is open and the
+                            // in-flight window has room (caps memory the same way
+                            // Phase 1's loader caps its FuturesUnordered window).
+                            maybe_buf = rx.recv(), if channel_open && in_flight.len() < WORKER_WINDOW => {
                                 match maybe_buf {
                                     Some(buf) => {
                                         in_flight.push(producer.send_record(
@@ -280,9 +301,11 @@ fn main() {
                 });
 
                 // Consume task: polls and processes records, sends output
-                // buffers to the produce task without waiting for I/O.
+                // buffers to the produce task. `tx.send().await` blocks once
+                // the bounded channel is full, throttling how far ahead of
+                // the producer this loop can get.
                 let mut consecutive_empty = 0u32;
-                loop {
+                'consume: loop {
                     if PROCESSED_COUNTER.load(Ordering::Relaxed) >= TOTAL_RECORDS {
                         break;
                     }
@@ -332,7 +355,9 @@ fn main() {
                             }
                             let mut buf = Vec::with_capacity(16);
                             write_varint(&mut buf, sum);
-                            let _ = tx.send(buf);
+                            if tx.send(buf).await.is_err() {
+                                break 'consume;
+                            }
                         }
                     }
                 }

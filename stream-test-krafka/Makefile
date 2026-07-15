@@ -1,4 +1,4 @@
-.PHONY: build run-benchmark run-stream run-producer run-consumer docker-build docker-run
+.PHONY: build run-benchmark run-benchmark-durable run-stream run-producer run-consumer docker-build docker-run
 
 BOOTSTRAP ?= 127.0.0.1:9094
 
@@ -13,6 +13,15 @@ run-benchmark:
 	  --bootstrap-server localhost:9092 --create --if-not-exists \
 	  --topic integer-sum-output-benchmark --partitions 8 --replication-factor 1
 	BENCHMARK=1 NUM_WORKERS=8 cargo run --release --bin processor
+
+run-benchmark-durable:
+	docker exec kafka-broker /opt/kafka/bin/kafka-topics.sh \
+	  --bootstrap-server localhost:9092 --create --if-not-exists \
+	  --topic integer-list-input-benchmark --partitions 8 --replication-factor 1
+	docker exec kafka-broker /opt/kafka/bin/kafka-topics.sh \
+	  --bootstrap-server localhost:9092 --create --if-not-exists \
+	  --topic integer-sum-output-benchmark --partitions 8 --replication-factor 1
+	BENCHMARK=1 DURABLE=1 NUM_WORKERS=8 cargo run --release --bin processor
 
 run-stream:
 	cargo run --release --bin processor

@@ -2,15 +2,15 @@
 
 ## 1. Objective
 
-Implement `streaming-performance-spec.md` in Rust using the **krafka** crate (v0.8) —
+Implement `streaming-performance-spec.md` in Rust using the **krafka** crate (v0.12) —
 a pure-Rust, async-native Kafka client — and benchmark it against `stream-test-rust`
 (rdkafka / librdkafka). The goal is to validate krafka's throughput ceiling and document
 the architectural differences that explain any performance gap.
 
 ## 2. Architecture & Technology Stack
 
-- **Language**: Rust (Edition 2021, MSRV 1.88)
-- **Kafka Library**: `krafka = "0.8"` (published crate)
+- **Language**: Rust (Edition 2024, MSRV 1.88)
+- **Kafka Library**: `krafka = "0.12"` (upgraded from v0.8 / v0.11)
 - **Async Runtime**: `tokio` (multi-thread, one runtime per worker OS thread)
 - **Serialization**: Manual Zig-Zag (LEB128) — no Avro library overhead
 - **Concurrency Model**: Each worker runs on a dedicated OS thread with its own
@@ -22,8 +22,8 @@ the architectural differences that explain any performance gap.
 
 ```
 stream-test-krafka/
-├── Cargo.toml          # krafka 0.8, tokio, futures, rand, tracing-subscriber
-├── Makefile            # run-benchmark, docker-build, docker-run-benchmark
+├── Cargo.toml          # krafka 0.12, tokio, futures, rand, tracing-subscriber
+├── Makefile            # run-benchmark, run-benchmark-durable, docker-build, docker-run-benchmark
 ├── Dockerfile          # Multi-stage: rust:1.88-alpine builder → alpine runtime
 ├── .dockerignore / .gitignore
 └── src/bin/
@@ -34,19 +34,23 @@ stream-test-krafka/
 
 ### Phase 1 — Load
 
-A `JoinSet` window of 10,000 concurrent tasks drives a single `Arc<Producer>` with
-`Acks::None` (resolves at TCP layer, no broker RTT). The encode loop submits tasks
-and drains completed ones when the window fills, then awaits full drain and calls
-`flush()` before proceeding to Phase 2.
+A single-task `FuturesUnordered` pool of 10,000 concurrent futures drives a single 
+`Arc<Producer>`. Concurrency is managed inside a single thread without independent task
+spawning, guaranteeing that the sends are initiated and polled in order. This structural 
+alignment prevents sequence number drift when running with `idempotent(true)`. The loop
+submits futures and polls them to make progress when the window is full.
 
 Phase 1 only runs when the `BENCHMARK` environment variable is set.
 
 ### Phase 2 — Process
 
 Each of `NUM_WORKERS` workers runs on its own OS thread + Tokio runtime and owns:
-- One `Consumer` (no group ID; `assign()` + explicit `seek(partition, 0)`, `max_poll_records=50_000`, `max_partition_fetch_bytes=10MB`)
+- One `Consumer` (no group ID; `assign()` + explicit `seek(partition, 0)`, `max_poll_records=50_000`, `max_partition_fetch_bytes=4MB`)
 - One `Producer` (`Acks::None`, `linger=5ms`, `batch_size=64KiB`)
-- An `mpsc::unbounded_channel` decoupling the consume loop from producer I/O
+- A bounded `mpsc::channel` (capacity 10,000) decoupling the consume loop from producer
+  I/O. The bound is load-bearing, not incidental: it applies backpressure from the
+  producer back to the consume loop when production falls behind, capping memory. An
+  earlier, unbounded version of this channel caused an OOM crash under load (see §4).
 
 Each worker is assigned exactly one partition via `consumer.assign()` — bypassing the
 group coordinator entirely (no rebalances, no heartbeats, no `CoordinatorNotAvailable`
@@ -56,9 +60,12 @@ to guarantee the fetch offset is resolved even if the `ListOffsets` RPC during
 
 The consume loop calls `consumer.poll(50ms)` in a tight loop. Each call issues one
 `FetchRequest` to the broker with `max_wait_ms=50`. Records are decoded (Zig-Zag),
-summed, and put on the channel without awaiting the producer. A separate `produce_task`
-drains the channel via `FuturesUnordered` and `tokio::select!` so the consume loop is
-never blocked on I/O.
+summed, and sent to the channel — `tx.send(buf).await` blocks once the channel is full,
+which is the mechanism that throttles the consume loop when the producer falls behind. A
+separate `produce_task` drains the channel via a `FuturesUnordered` pool of in-flight
+sends (also capped at 10,000, gating the "accept new work" branch of its
+`tokio::select!` once full) so the consume loop is never blocked on send I/O directly,
+while total unacknowledged work is still bounded.
 
 Termination: after 3 consecutive empty polls (partition drained), the consume loop
 breaks. `tx` is dropped, signalling `produce_task` to drain its `FuturesUnordered` queue
@@ -82,19 +89,27 @@ Topic names are hardcoded:
 
 ## 4. Performance Findings
 
-### Measured result (krafka v0.8)
+### Measured result (krafka v0.12)
 
 | Metric | Value |
 |---|---|
 | Total records | 50,000,000 |
-| Processing time | ~73 s |
-| Throughput | ~682,000 msg/sec |
+| Processing time | 74.88 s |
+| Throughput | 667,741 msg/sec |
 | Hardware | Apple M4, macOS, Kafka 4.2.0 (Docker / Lima) |
 | Workers | 8 |
 
-This is a **3.7× improvement over krafka v0.7** (~185K msg/sec). The v0.8 improvement
-comes from a more efficient internal fetch pipeline and better incremental fetch session
-(KIP-227) handling, which reduces per-poll overhead when `max_poll_records` is large.
+This is a **~3.6× improvement over krafka v0.7** (~185K msg/sec), in line with the v0.8
+result previously measured here (~682K msg/sec) — the v0.8→v0.12 upgrade did not
+regress or meaningfully change throughput.
+
+**Note:** the first krafka 0.12 benchmark run crashed (`Killed: 9`) partway through
+Phase 2 with an out-of-memory kill, caused by the `mpsc::unbounded_channel` +
+unbounded `FuturesUnordered` described below having no backpressure — consumption
+(batched, CPU-bound) outran production (network-bound) until the backlog exhausted
+memory. Both are now bounded to a 10,000-item window (matching Phase 1's loader); the
+measured result above reflects the fixed, bounded pipeline. See
+`BENCHMARK_SUMMARY.md` ("Fixed: OOM crash...") for the root-cause writeup.
 
 ### What was tried and why it was slow (v0.7 era)
 
@@ -199,7 +214,7 @@ this reduces broker scheduling overhead meaningfully.
 5. **Per-worker OS thread + own `Runtime`.** Sharing one multi-thread Tokio pool across
    all workers causes work-stealing scheduler contention that measurably reduces throughput.
 
-6. **`max_poll_records=50_000` and `max_partition_fetch_bytes=10MB`** are needed to
+6. **`max_poll_records=50_000` and `max_partition_fetch_bytes=4MB`** are needed to
    amortise the per-poll RTT over as many records as possible.
 
 7. **`FuturesUnordered` alone does not make sends concurrent** unless it is polled
@@ -211,15 +226,34 @@ this reduces broker scheduling overhead meaningfully.
    consecutive empty results and drop `tx` so the produce task can flush its
    `local_counter` remainder and exit cleanly.
 
+9. **`JoinSet::spawn()` is unsafe with `idempotent(true)`.** Sequence-number
+   allocation happens atomically inside `send()`, but tokio doesn't guarantee
+   spawned tasks run in spawn order — concurrently spawned sends to the same
+   partition can have their sequence numbers allocated out of order, and the broker
+   rejects the result with `OutOfOrderSequenceNumber`. Use a single-task
+   `FuturesUnordered` instead (as Phase 2 already does) any time durability beyond
+   `idempotent(false)` is required — and keep `send()`/`send_record()` as that
+   future's only await point; an async encode/registry step ahead of it reintroduces
+   the same race through a different door.
+
+10. **A channel that "decouples the consume loop from producer I/O" still needs a
+    bound.** Removing the producer `await` from the consume loop's hot path (lesson 4)
+    is not the same as removing backpressure entirely — if the channel and the
+    downstream `FuturesUnordered` are both unbounded, the consumer (batched,
+    CPU-bound) can outrun the producer (network-bound) indefinitely, and the backlog
+    grows until the process is OOM-killed. Bound both to the same window size used
+    elsewhere (10,000, matching Phase 1's loader) so the producer's real throughput
+    caps how far ahead the consumer can get.
+
 ## 5. Comparison vs. `stream-test-rust` (rdkafka)
 
-| Aspect | stream-test-krafka (v0.8) | stream-test-rust (rdkafka) |
+| Aspect | stream-test-krafka (v0.12) | stream-test-rust (rdkafka) |
 |---|---|---|
 | C dependency | None | Yes (librdkafka, cmake) |
 | Cross-compilation | Pure Rust (`cargo build --target …`) | Requires C cross-compiler |
 | Producer send model | Async, ACK-gated | Sync enqueue into C ring buffer |
 | Consumer fetch model | Sync per-poll network fetch | Background C prefetch thread |
-| Observed throughput (8 workers, local broker) | ~682K msg/sec | ~3.5M msg/sec |
+| Observed throughput (8 workers, local broker) | 667,741 msg/sec | ~3.5M msg/sec |
 | Throughput gap | ~5× | N/A |
 | Gap closable by app tuning? | Partially — pipelining fetch+process would help | N/A |
 
@@ -228,13 +262,13 @@ cycle vs rdkafka's continuous background prefetch, plus the 8-separate-requests 
 
 ## 6. Implementation Checklist
 
-- [x] `processor.rs` — Phase 1 JoinSet load + Phase 2 channel-decoupled consume/produce loop, per-OS-thread runtime
+- [x] `processor.rs` — Phase 1 `FuturesUnordered` load + Phase 2 bounded-channel consume/produce loop, per-OS-thread runtime
 - [x] `producer.rs` — standalone producer for normal (non-benchmark) mode
 - [x] `consumer.rs` — standalone consumer for normal (non-benchmark) mode
 - [x] Inline Zig-Zag encode/decode (`read_varint` / `write_varint`)
 - [x] Progress reporter (1-second interval)
 - [x] Final result log: `BENCHMARK RESULT (KRAFKA)`, total records, seconds, msg/sec
-- [x] `Cargo.toml` — krafka 0.8 (published), tokio, futures, rand, tracing-subscriber
+- [x] `Cargo.toml` — krafka 0.12 (published), tokio, futures, rand, tracing-subscriber
 - [x] `Makefile` — `run-benchmark`, `docker-build`, `docker-run-benchmark`
 - [x] `Dockerfile` — multi-stage Alpine build
 - [x] `assign()` + explicit `seek(0)` per worker partition
